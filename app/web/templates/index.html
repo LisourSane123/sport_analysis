@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="pl" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Waga_RP — panel</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚖️</text></svg>">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">⚖</span>
+    <div>
+      <h1>Waga_RP</h1>
+      <p class="sub" id="healthLine">ładowanie…</p>
+    </div>
+  </div>
+  <div class="controls">
+    <label class="field">
+      <span>Profil</span>
+      <select id="userSelect"></select>
+    </label>
+    <label class="field">
+      <span>Okres</span>
+      <select id="rangeSelect">
+        <option value="7">7 dni</option>
+        <option value="30" selected>30 dni</option>
+        <option value="90">90 dni</option>
+        <option value="365">rok</option>
+        <option value="0">wszystko</option>
+      </select>
+    </label>
+    <button id="themeToggle" class="icon-btn" title="Motyw jasny/ciemny">◐</button>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="body">Sylwetka</button>
+  <button class="tab" data-tab="runs">Biegi</button>
+  <button class="tab" data-tab="history">Historia</button>
+  <button class="tab" data-tab="forecast">Predykcje</button>
+</nav>
+
+<main>
+  <!-- ============ SYLWETKA ============ -->
+  <section class="panel active" id="tab-body">
+    <div class="kpi-grid">
+      <article class="kpi accent">
+        <span class="kpi-label">Waga</span>
+        <strong class="kpi-value" id="kpiWeight">—</strong>
+        <span class="kpi-foot" id="kpiWeightDelta"></span>
+      </article>
+      <article class="kpi">
+        <span class="kpi-label">Tkanka tłuszczowa</span>
+        <strong class="kpi-value" id="kpiFat">—</strong>
+        <span class="kpi-foot" id="kpiFatFoot"></span>
+      </article>
+      <article class="kpi">
+        <span class="kpi-label">Masa mięśniowa</span>
+        <strong class="kpi-value" id="kpiMuscle">—</strong>
+        <span class="kpi-foot" id="kpiMuscleFoot"></span>
+      </article>
+      <article class="kpi">
+        <span class="kpi-label">BMI</span>
+        <strong class="kpi-value" id="kpiBmi">—</strong>
+        <span class="kpi-foot" id="kpiBmiFoot"></span>
+      </article>
+      <article class="kpi">
+        <span class="kpi-label">Woda</span>
+        <strong class="kpi-value" id="kpiWater">—</strong>
+        <span class="kpi-foot">nawodnienie organizmu</span>
+      </article>
+      <article class="kpi">
+        <span class="kpi-label">BMR</span>
+        <strong class="kpi-value" id="kpiBmr">—</strong>
+        <span class="kpi-foot" id="kpiMetaAge"></span>
+      </article>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Trend wagi</h2>
+        <div class="chips" id="weightSeriesChips">
+          <button class="chip active" data-series="weight_kg">waga</button>
+          <button class="chip" data-series="fat_percentage">tłuszcz %</button>
+          <button class="chip" data-series="muscle_mass">mięśnie</button>
+          <button class="chip" data-series="water_percentage">woda %</button>
+          <button class="chip" data-series="bmi">BMI</button>
+        </div>
+      </div>
+      <div class="chart-wrap"><canvas id="weightChart"></canvas></div>
+      <p class="empty" id="weightEmpty" hidden>Brak pomiarów w wybranym okresie.</p>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-head"><h2>Skład ciała — ostatni pomiar</h2></div>
+        <div class="chart-wrap small"><canvas id="compositionChart"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Szczegóły pomiaru</h2></div>
+        <dl class="detail-list" id="latestDetails"></dl>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ BIEGI ============ -->
+  <section class="panel" id="tab-runs">
+    <div class="kpi-grid">
+      <article class="kpi accent-2">
+        <span class="kpi-label">Dystans</span>
+        <strong class="kpi-value" id="kpiDistance">—</strong>
+        <span class="kpi-foot" id="kpiRunCount"></span>
+      </article>
+      <article class="kpi">
+        <span class="kpi-label">Czas w ruchu</span>
+        <strong class="kpi-value" id="kpiTime">—</strong>
+        <span class="kpi-foot" id="kpiAvgPace"></span>
+      </article>
+      <article class="kpi">
+        <span class="kpi-label">Przewyższenie</span>
+        <strong class="kpi-value" id="kpiElev">—</strong>
+        <span class="kpi-foot">suma podbiegów</span>
+      </article>
+      <article class="kpi">
+        <span class="kpi-label">Średnie tętno</span>
+        <strong class="kpi-value" id="kpiHr">—</strong>
+        <span class="kpi-foot" id="kpiLastRun"></span>
+      </article>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Dystans tygodniowo</h2>
+        <label class="field inline">
+          <span>Sport</span>
+          <select id="sportSelect"><option value="all">wszystkie</option></select>
+        </label>
+      </div>
+      <div class="chart-wrap"><canvas id="volumeChart"></canvas></div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-head"><h2>Tempo w czasie</h2></div>
+        <div class="chart-wrap small"><canvas id="paceChart"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Ostatnie aktywności</h2></div>
+        <div class="table-wrap">
+          <table id="activityTable">
+            <thead><tr><th>Data</th><th>Nazwa</th><th>Dystans</th><th>Czas</th><th>Tempo</th><th>Tętno</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ HISTORIA ============ -->
+  <section class="panel" id="tab-history">
+    <div class="card">
+      <div class="card-head"><h2>Wszystkie pomiary</h2></div>
+      <div class="table-wrap">
+        <table id="measurementTable">
+          <thead><tr><th>Data</th><th>Profil</th><th>Waga</th><th>Tłuszcz</th><th>Mięśnie</th><th>Woda</th><th>Kości</th><th>Trzewny</th><th>BMI</th><th>Impedancja</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PREDYKCJE (placeholder) ============ -->
+  <section class="panel" id="tab-forecast">
+    <div class="card placeholder">
+      <div class="placeholder-icon">📈</div>
+      <h2>Predykcje — następny etap</h2>
+      <p id="forecastMessage">Moduł prognozowania nie jest jeszcze włączony.</p>
+      <ul class="planned" id="forecastPlanned"></ul>
+      <p class="hint">Miejsce gotowe: dane wystawia <code>GET /api/predictions</code>,
+        wykres wstawimy w ramkę poniżej.</p>
+      <div class="chart-wrap ghost"><span>obszar wykresu prognozy</span></div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">Waga_RP · Raspberry Pi 5 · SQLite · dane: Mi Scale 2 + Strava</footer>
+
+<script src="/static/vendor/chart.umd.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

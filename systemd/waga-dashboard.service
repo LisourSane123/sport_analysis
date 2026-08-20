@@ -1,0 +1,14 @@
+[Unit]
+Description=Waga_RP - dashboard webowy
+After=network.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__ROOT__
+ExecStart=__ROOT__/.venv/bin/python -m app.web.server
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

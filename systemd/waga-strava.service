@@ -1,0 +1,15 @@
+[Unit]
+Description=Waga_RP - synchronizacja aktywnosci ze Stravy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__ROOT__
+ExecStart=__ROOT__/.venv/bin/python -m app.strava.sync --loop
+Restart=always
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target

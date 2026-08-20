@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Blokuje commit, jesli do indeksu trafily sekrety albo dane osobowe.
+# Wlaczenie: git config core.hooksPath .githooks
+set -uo pipefail
+
+staged="$(git diff --cached --name-only --diff-filter=ACM)"
+[[ -z "$staged" ]] && exit 0
+
+blocked=""
+while IFS= read -r file; do
+  case "$file" in
+    .env|.env.*|*/.env|*.db|*.db-wal|*.db-shm|*/garmin_tokens/*|*garmin_tokens.json)
+      [[ "$file" == ".env.example" ]] && continue
+      blocked+="  $file"$'\n' ;;
+  esac
+done <<< "$staged"
+
+# Wartosci wygladajace na klucze w plikach, ktore normalnie ich nie maja
+leaks="$(git diff --cached -U0 -- . ':!*.example' \
+  | grep -E '^\+' \
+  | grep -inE '(client_secret|refresh_token|access_token|password)[[:space:]]*[=:][[:space:]]*[^[:space:]"'"'"']{8,}' \
+  || true)"
+
+if [[ -n "$blocked" || -n "$leaks" ]]; then
+  echo "PRE-COMMIT: commit zatrzymany."
+  [[ -n "$blocked" ]] && { echo "Pliki, ktore nie moga trafic do repo:"; echo "$blocked"; }
+  [[ -n "$leaks" ]] && { echo "Linie wygladajace na sekret:"; echo "$leaks"; }
+  echo "Jesli to falszywy alarm: git commit --no-verify"
+  exit 1
+fi
+exit 0

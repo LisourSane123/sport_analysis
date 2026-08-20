@@ -1,0 +1,15 @@
+[Unit]
+Description=Waga_RP - synchronizacja danych z Garmin Connect
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__ROOT__
+ExecStart=__ROOT__/.venv/bin/python -m app.garmin.sync --loop
+Restart=always
+RestartSec=120
+
+[Install]
+WantedBy=multi-user.target
