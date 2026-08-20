@@ -21,6 +21,7 @@ from app.db import (add_user, connect, connect_readonly, delete_duplicates,
 from app.garmin import sync as garmin_sync
 from app.garmin.mapping import activity_row, daily_row, has_data
 from app.scale.body_metrics import BodyMetrics
+from app.stats import time_weighted_mean, weighted_averages
 from app.scale.decoder import decode
 from app.scale.runner import _is_repeat as is_repeat
 from app.scale.runner import resolve_time, store_measurement
@@ -722,3 +723,123 @@ class TestReadOnlyConnection(unittest.TestCase):
         message = str(ctx.exception)
         self.assertIn("/nie/ma/takiej/bazy.db", message)
         self.assertIn("fetch_db.sh", message)
+
+
+class TestTimeWeightedMean(unittest.TestCase):
+    """Srednia wazona czasem - kazdy pomiar wazy tyle, ile 'obowiazywal'."""
+
+    def setUp(self):
+        self.t0 = datetime(2026, 8, 14, 7, 0)
+
+    def test_two_points_give_midpoint(self):
+        points = [(self.t0, 80.0), (self.t0 + timedelta(days=1), 84.0)]
+        mean, hours = time_weighted_mean(points)
+        self.assertAlmostEqual(mean, 82.0)
+        self.assertAlmostEqual(hours, 24.0)
+
+    def test_cluster_does_not_dominate(self):
+        """Piec wazen jednego poranka nie moze przewazyc calego tygodnia."""
+        gesty = [(self.t0 + timedelta(minutes=m), 84.0) for m in (0, 10, 20, 30, 40)]
+        points = gesty + [(self.t0 + timedelta(days=7), 80.0)]
+        arytmetyczna = sum(v for _, v in points) / len(points)
+        mean, _ = time_weighted_mean(points)
+        self.assertAlmostEqual(arytmetyczna, 83.33, places=2)
+        self.assertAlmostEqual(mean, 82.01, places=2)
+        self.assertLess(mean, arytmetyczna)
+
+    def test_stable_value_is_returned_as_is(self):
+        points = [(self.t0 + timedelta(days=d), 83.0) for d in range(5)]
+        mean, hours = time_weighted_mean(points)
+        self.assertAlmostEqual(mean, 83.0)
+        self.assertAlmostEqual(hours, 96.0)
+
+    def test_edge_cases(self):
+        self.assertEqual(time_weighted_mean([]), (None, 0.0))
+        self.assertEqual(time_weighted_mean([(self.t0, 83.2)]), (83.2, 0.0))
+        # dwa pomiary z ta sama sekunda: nie ma czasu do wazenia, wiec zwykla srednia
+        mean, hours = time_weighted_mean([(self.t0, 83.0), (self.t0, 85.0)])
+        self.assertAlmostEqual(mean, 84.0)
+        self.assertEqual(hours, 0.0)
+
+    def test_order_does_not_matter(self):
+        a = [(self.t0, 80.0), (self.t0 + timedelta(days=1), 84.0)]
+        self.assertEqual(time_weighted_mean(a), time_weighted_mean(list(reversed(a))))
+
+    def test_each_column_uses_its_own_points(self):
+        """Brak skladu ciala w jednym pomiarze nie wyrzuca jego wagi ze sredniej."""
+        rows = [
+            {"measured_at": self.t0.isoformat(), "weight_kg": 80.0, "fat_percentage": 20.0},
+            {"measured_at": (self.t0 + timedelta(days=1)).isoformat(),
+             "weight_kg": 84.0, "fat_percentage": None},
+            {"measured_at": (self.t0 + timedelta(days=2)).isoformat(),
+             "weight_kg": 84.0, "fat_percentage": 18.0},
+        ]
+        values, hours = weighted_averages(rows, ("weight_kg", "fat_percentage"))
+        self.assertAlmostEqual(values["weight_kg"], 83.0)      # 82 przez dobe, 84 przez dobe
+        self.assertAlmostEqual(values["fat_percentage"], 19.0)  # tylko dwa pomiary, 48 h
+        self.assertAlmostEqual(hours, 48.0)
+
+
+class TestWeeklyAverageEndpoint(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        self.path = tmp.name
+        self._orig_db = db_module.DB_PATH
+        db_module.DB_PATH = self.path
+        init_db(self.path)
+        self.conn = connect(self.path)
+        self.uid = add_user(self.conn, "lukasz", "Lukasz", 182, "1995-04-12", "male", 84)
+        self.client = TestClient(server.app)
+
+    def tearDown(self):
+        self.conn.close()
+        db_module.DB_PATH = self._orig_db
+        os.unlink(self.path)
+
+    def _add(self, days_ago, weight, user_id=None, **extra):
+        when = datetime.now() - timedelta(days=days_ago)
+        insert_measurement(self.conn, {
+            "user_id": user_id or self.uid,
+            "measured_at": when.isoformat(timespec="seconds"),
+            "weight_kg": weight, **extra})
+
+    def test_week_block_uses_time_weighting(self):
+        self._add(6, 84.0)
+        self._add(0, 80.0)
+        week = self.client.get("/api/summary?user=lukasz").json()["week"]
+        self.assertEqual(week["count"], 2)
+        self.assertAlmostEqual(week["values"]["weight_kg"], 82.0, places=1)
+        self.assertAlmostEqual(week["vs_latest"]["weight_kg"], -2.0, places=1)
+        self.assertAlmostEqual(week["span_hours"], 144.0, places=0)
+
+    def test_only_last_week_counts(self):
+        self._add(30, 90.0)                     # poza oknem
+        self._add(3, 84.0)
+        self._add(0, 84.0)
+        week = self.client.get("/api/summary?user=lukasz").json()["week"]
+        self.assertEqual(week["count"], 2)
+        self.assertAlmostEqual(week["values"]["weight_kg"], 84.0, places=1)
+
+    def test_window_length_is_configurable(self):
+        self._add(20, 90.0)
+        self._add(0, 80.0)
+        week = self.client.get("/api/summary?user=lukasz&week_days=30").json()["week"]
+        self.assertEqual(week["days"], 30)
+        self.assertEqual(week["count"], 2)
+
+    def test_all_users_reports_owner_of_latest(self):
+        """Srednia wagi kilku osob nie znaczy nic - liczymy dla osoby z ostatniego pomiaru."""
+        other = add_user(self.conn, "ola", "Ola", 168, "1997-08-01", "female", 59)
+        self._add(2, 59.0, user_id=other)
+        self._add(0, 84.0)
+        week = self.client.get("/api/summary").json()["week"]
+        self.assertEqual(week["user"]["username"], "lukasz")
+        self.assertEqual(week["count"], 1)
+        self.assertAlmostEqual(week["values"]["weight_kg"], 84.0)
+
+    def test_empty_database_is_handled(self):
+        week = self.client.get("/api/summary?user=lukasz").json()["week"]
+        self.assertEqual(week["count"], 0)
+        self.assertEqual(week["values"], {})
+        self.assertIsNone(week["user"])

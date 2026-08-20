@@ -195,6 +195,24 @@ Tokeny Garmina leżą poza bazą, w pliku `data/garmin_tokens/garmin_tokens.json
 
 Podgląd danych: `sqlite3 data/waga.db "SELECT measured_at, weight_kg, fat_percentage FROM measurements ORDER BY 1 DESC LIMIT 10"`
 
+### Ostatni pomiar i średnie tygodniowe
+
+Kafelki i karta „Szczegóły pomiaru" pokazują dwie kolumny: **ostatni pomiar** oraz
+**średnią z 7 dni ważoną czasem**. Przy kafelkach jest jeszcze różnica między nimi —
+na czerwono, gdy odchylenie jest niekorzystne (więcej tłuszczu, mniej mięśni), na zielono
+w drugą stronę; przy wadze i BMI kolor jest neutralny, bo kierunek zależy od Twojego celu.
+
+Dlaczego ważona czasem, a nie zwykła: ważenia nie są równomierne. Pięć wejść na wagę
+w poniedziałek i jedno w niedzielę dałoby średnią opisującą głównie poniedziałek.
+Tutaj każdy pomiar waży tyle, ile czasu „obowiązywał" — liczymy pole pod wykresem metodą
+trapezów i dzielimy przez długość okresu (`app/stats.py`). Na przykładzie z testów:
+pięć ważeń 84 kg jednego poranka i jedno 80 kg tydzień później dają 83,33 kg średniej
+arytmetycznej, ale 82,01 kg ważonej czasem.
+
+Okno zmienisz parametrem: `GET /api/summary?user=lukasz&week_days=14`. Przy filtrze
+„wszyscy" średnie liczone są dla osoby z ostatniego pomiaru — uśrednianie wagi kilku
+osób nie miałoby sensu — a karta podpisuje, czyje to liczby.
+
 ### Dostęp do bazy z własnych skryptów
 
 Baza chodzi w trybie WAL, więc czytanie nie koliduje z działającymi usługami. Do analiz
@@ -236,7 +254,7 @@ W trybie `mode=ro` SQLite nigdy nie zakłada pliku, więc ten komunikat zawsze z
 ## Dashboard
 
 Zakładki: **Sylwetka** (KPI, trend wagi z przełącznikiem serii, skład ciała, szczegóły
-ostatniego pomiaru), **Biegi** (dystans tygodniowo, tempo w czasie, tabela aktywności),
+ostatniego pomiaru zestawione ze średnimi tygodniowymi), **Biegi** (dystans tygodniowo, tempo w czasie, tabela aktywności),
 **Historia** (wszystkie pomiary), **Predykcje** — *miejsce zarezerwowane na kolejny
 etap projektu*. Filtry: profil i zakres czasu; motyw jasny/ciemny; odświeżanie co minutę.
 Adres wspiera deep-linki do zakładek (`#runs`, `#history`, `#forecast`).
@@ -252,7 +270,7 @@ Chart.js jest w repo (`app/web/static/vendor/`) — dashboard działa bez intern
 | `GET /api/measurements?user=&days=` | pomiary |
 | `GET /api/activities?days=&sport=&user=` | treningi z Garmina |
 | `GET /api/garmin/daily?user=&days=` | dzienne dane: sen, HRV, tętno spoczynkowe, stres, gotowość |
-| `GET /api/summary?user=&days=` | KPI dla kafelków |
+| `GET /api/summary?user=&days=&week_days=` | KPI dla kafelków + średnie tygodniowe ważone czasem |
 | `GET /api/measurements/all?user=&unassigned=&limit=&offset=` | wszystkie pomiary, bez okna czasowego |
 | `GET /api/measurements/duplicates?window=` | wykryte serie powtórek |
 | `POST /api/measurements/dedupe` | usunięcie powtórek (zostaje najstarszy pomiar z serii) |
@@ -356,6 +374,7 @@ app/
   web/               FastAPI + dashboard (HTML, JS, Chart.js lokalnie)
 manage_users.py      kreator profili i powiązań z Garminem
   settings.py        ustawienia zmienialne z panelu (baza -> .env -> domyślne)
+  stats.py           średnie ważone czasem
 tools/               update.sh oraz narzędzia jednorazowe (naprawa dat, powtórki, Strava)
 systemd/             pliki usług: waga-scale, waga-garmin, waga-dashboard
 tests/               testy bez sprzętu

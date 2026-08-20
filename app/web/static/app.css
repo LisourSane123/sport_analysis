@@ -174,6 +174,28 @@ tbody tr:hover { background: var(--surface-2); }
 .detail-list dt { color: var(--muted); }
 .detail-list dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 
+/* dwie kolumny wartosci: ostatni pomiar i srednia tygodnia */
+.detail-list.two-col { grid-template-columns: 1fr auto auto; gap: 8px 18px; }
+.detail-list.two-col dd.week { color: var(--muted); min-width: 6.5ch; }
+.detail-list .head { font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+                     color: var(--muted); padding-bottom: 2px; }
+
+/* linia ze srednia tygodniowa w kafelku */
+.kpi-week {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  min-height: 16px;
+}
+.kpi-week b { font-weight: 600; color: var(--text); }
+.kpi-week .diff { font-size: 11.5px; }
+.kpi-week .diff.up { color: var(--bad); }
+.kpi-week .diff.down { color: var(--good); }
+.kpi-week .diff.flat { color: var(--muted); }
+
 /* ---------- placeholder predykcji ---------- */
 .placeholder { text-align: center; padding: 34px 20px; }
 .placeholder-icon { font-size: 34px; }

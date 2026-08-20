@@ -12,6 +12,9 @@
     (v === null || v === undefined || Number.isNaN(v))
       ? "—" : `${Number(v).toFixed(digits)}${unit ? `<small>${unit}</small>` : ""}`;
 
+  // Chart.js wylicza podzialke w zmiennoprzecinkowych, stad 84.80000000000001
+  const axisNum = (v) => Number(v).toFixed(Math.abs(v) >= 100 ? 0 : 1).replace(/\.0$/, "");
+
   const num = (v, digits = 1) =>
     (v === null || v === undefined) ? "—" : Number(v).toFixed(digits);
 
@@ -124,7 +127,7 @@
         scales: {
           ...baseOptions().scales,
           y: { ...baseOptions().scales.y, ticks: { color: css("--muted"), padding: 8,
-               callback: (v) => `${v} ${meta.unit}` } },
+               callback: (v) => `${axisNum(v)} ${meta.unit}` } },
         },
       },
     });
@@ -185,11 +188,11 @@
           ...baseOptions().plugins,
           tooltip: { ...baseOptions().plugins.tooltip,
             callbacks: { title: (i) => `tydzień od ${i[0].label}`,
-                         label: (i) => `${i.parsed.y} km` } },
+                         label: (i) => `${axisNum(i.parsed.y)} km` } },
         },
         scales: { ...baseOptions().scales,
           y: { ...baseOptions().scales.y, ticks: { color: css("--muted"), padding: 8,
-               callback: (v) => `${v} km` } } },
+               callback: (v) => `${axisNum(v)} km` } } },
       },
     });
   }
@@ -280,6 +283,46 @@
       </tr>`).join("") || `<tr><td colspan="6">Brak aktywności — uruchom sync Stravy.</td></tr>`;
   }
 
+  // --- srednie tygodniowe (wazone czasem) ---
+  // Kierunek "dobrze/zle" zalezy od wielkosci: wiecej miesni to nie to samo,
+  // co wiecej tluszczu. `good` mowi, czy wzrost wzgledem sredniej ma byc
+  // pokazany jako korzystny; null = neutralnie, bez kolorowania.
+  const WEEK_META = {
+    weight_kg:        { digits: 2, unit: " kg",   good: null },
+    fat_percentage:   { digits: 1, unit: " %",    good: false },
+    muscle_mass:      { digits: 1, unit: " kg",   good: true },
+    bmi:              { digits: 1, unit: "",      good: null },
+    water_percentage: { digits: 1, unit: " %",    good: true },
+    bmr:              { digits: 0, unit: " kcal", good: null },
+  };
+
+  function weekLine(elementId, field, week) {
+    const el = $(`#${elementId}`);
+    const value = week?.values?.[field];
+    if (value === undefined || value === null) { el.innerHTML = ""; return; }
+
+    const meta = WEEK_META[field] || { digits: 1, unit: "", good: null };
+    const diff = week.vs_latest?.[field];
+    let badge = "";
+    if (diff !== undefined && diff !== null) {
+      const rounded = Number(diff.toFixed(meta.digits));
+      if (Math.abs(rounded) >= Math.pow(10, -meta.digits) / 2) {   // zero pomijamy
+        const kind = meta.good === null ? "flat"
+                   : ((rounded > 0) === meta.good ? "down" : "up");
+        badge = `<span class="diff ${kind}" title="ostatni pomiar minus średnia tygodnia">`
+              + `${rounded > 0 ? "+" : "−"}${Math.abs(rounded).toFixed(meta.digits)}</span>`;
+      }
+    }
+    el.innerHTML = `<span>śr. ${week.days} dni:</span>`
+      + `<b>${Number(value).toFixed(meta.digits)}${meta.unit}</b>${badge}`;
+  }
+
+  function weekValue(week, field, digits, unit = "") {
+    const value = week?.values?.[field];
+    return (value === undefined || value === null)
+      ? "—" : `${Number(value).toFixed(digits)}${unit}`;
+  }
+
   function renderSummary(s) {
     const m = s.latest;
     $("#kpiWeight").innerHTML = m ? fmt(m.weight_kg, 2, " kg") : "—";
@@ -299,6 +342,14 @@
     $("#kpiBmr").innerHTML = m ? fmt(m.bmr, 0, " kcal") : "—";
     $("#kpiMetaAge").textContent = m?.metabolic_age ? `wiek metaboliczny ${num(m.metabolic_age, 0)} lat` : "";
 
+    const week = s.week;
+    weekLine("kpiWeightWeek", "weight_kg", week);
+    weekLine("kpiFatWeek", "fat_percentage", week);
+    weekLine("kpiMuscleWeek", "muscle_mass", week);
+    weekLine("kpiBmiWeek", "bmi", week);
+    weekLine("kpiWaterWeek", "water_percentage", week);
+    weekLine("kpiBmrWeek", "bmr", week);
+
     const a = s.activity;
     $("#kpiDistance").innerHTML = fmt((a.distance_m || 0) / 1000, 1, " km");
     $("#kpiRunCount").textContent = `${a.count} aktywności`;
@@ -311,23 +362,31 @@
       ? `ostatnia: ${dateLabel(s.last_activity.start_date_local)}` : "";
 
     const details = [
-      ["Data pomiaru", m ? dateTimeLabel(m.measured_at) : "—"],
-      ["Waga", m ? `${num(m.weight_kg, 2)} kg` : "—"],
-      ["Impedancja", m?.impedance ? `${m.impedance} Ω` : "—"],
-      ["Tkanka tłuszczowa", m ? `${num(m.fat_percentage)} %` : "—"],
-      ["Masa mięśniowa", m ? `${num(m.muscle_mass)} kg` : "—"],
-      ["Masa kostna", m ? `${num(m.bone_mass, 2)} kg` : "—"],
-      ["Woda", m ? `${num(m.water_percentage)} %` : "—"],
-      ["Białko", m ? `${num(m.protein_percentage)} %` : "—"],
-      ["Tłuszcz trzewny", m ? num(m.visceral_fat, 0) : "—"],
-      ["LBM", m ? `${num(m.lbm)} kg` : "—"],
-      ["BMR", m ? `${num(m.bmr, 0)} kcal` : "—"],
-      ["Wiek metaboliczny", m ? `${num(m.metabolic_age, 0)} lat` : "—"],
+      ["Data pomiaru", m ? dateTimeLabel(m.measured_at) : "—", ""],
+      ["Waga", m ? `${num(m.weight_kg, 2)} kg` : "—", weekValue(week, "weight_kg", 2, " kg")],
+      ["Impedancja", m?.impedance ? `${m.impedance} Ω` : "—", weekValue(week, "impedance", 0, " Ω")],
+      ["Tkanka tłuszczowa", m ? `${num(m.fat_percentage)} %` : "—", weekValue(week, "fat_percentage", 1, " %")],
+      ["Masa mięśniowa", m ? `${num(m.muscle_mass)} kg` : "—", weekValue(week, "muscle_mass", 1, " kg")],
+      ["Masa kostna", m ? `${num(m.bone_mass, 2)} kg` : "—", weekValue(week, "bone_mass", 2, " kg")],
+      ["Woda", m ? `${num(m.water_percentage)} %` : "—", weekValue(week, "water_percentage", 1, " %")],
+      ["Białko", m ? `${num(m.protein_percentage)} %` : "—", weekValue(week, "protein_percentage", 1, " %")],
+      ["Tłuszcz trzewny", m ? num(m.visceral_fat, 0) : "—", weekValue(week, "visceral_fat", 0)],
+      ["LBM", m ? `${num(m.lbm)} kg` : "—", weekValue(week, "lbm", 1, " kg")],
+      ["BMR", m ? `${num(m.bmr, 0)} kcal` : "—", weekValue(week, "bmr", 0, " kcal")],
+      ["Wiek metaboliczny", m ? `${num(m.metabolic_age, 0)} lat` : "—", weekValue(week, "metabolic_age", 0, " lat")],
       ["Zakres w okresie", s.weight.count
-        ? `${num(s.weight.min, 1)} – ${num(s.weight.max, 1)} kg (śr. ${num(s.weight.avg, 1)})` : "—"],
+        ? `${num(s.weight.min, 1)} – ${num(s.weight.max, 1)} kg` : "—", ""],
     ];
-    $("#latestDetails").innerHTML = details
-      .map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+    $("#latestDetails").innerHTML =
+      `<dt class="head">&nbsp;</dt><dd class="head">ostatni</dd>`
+      + `<dd class="head week">śr. ${week?.days ?? 7} dni</dd>`
+      + details.map(([k, v, w]) =>
+          `<dt>${k}</dt><dd>${v}</dd><dd class="week">${w || "—"}</dd>`).join("");
+
+    $("#weekNote").textContent = week && week.count
+      ? `średnie ważone czasem z ${week.count} pomiarów`
+        + (week.user && state.user === "all" ? ` · ${week.user.display_name}` : "")
+      : "";
 
     renderComposition(m);
   }

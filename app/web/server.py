@@ -18,6 +18,7 @@ from app.db import (add_user, connect, delete_duplicates, delete_measurement,
                     get_user, get_user_by_id, init_db, update_measurement,
                     update_user)
 from app.scale.body_metrics import composition_for
+from app.stats import weighted_averages
 
 BASE = Path(__file__).resolve().parent
 app = FastAPI(title="Waga_RP", docs_url="/api/docs", redoc_url=None)
@@ -152,8 +153,43 @@ def api_garmin_daily(user: str | None = None, days: int = 90,
     return {"days": days_rows}
 
 
+WEEK_FIELDS = ("weight_kg", "bmi", "fat_percentage", "water_percentage",
+               "muscle_mass", "bone_mass", "visceral_fat", "protein_percentage",
+               "lbm", "bmr", "metabolic_age", "impedance")
+
+
+def _week_summary(conn, latest, uid: int | None, days: int):
+    """Srednie wazone czasem z ostatnich `days` dni.
+
+    Przy filtrze "wszyscy" liczymy je dla osoby z ostatniego pomiaru - srednia
+    wagi kilku osob nie znaczylaby nic. Zwracamy tez, czyje to sa liczby.
+    """
+    if latest is None:
+        return {"days": days, "count": 0, "values": {}, "vs_latest": {},
+                "span_hours": 0.0, "user": None}
+
+    target = uid if uid is not None else latest["user_id"]
+    where, args = ("AND user_id = ?", [target]) if target is not None else ("", [])
+    since = (datetime.now() - timedelta(days=days)).isoformat(timespec="seconds")
+    rows = [dict(r) for r in conn.execute(
+        f"SELECT * FROM measurements WHERE measured_at >= ? {where} "
+        f"ORDER BY measured_at", [since, *args]).fetchall()]
+
+    values, span = weighted_averages(rows, WEEK_FIELDS)
+    vs_latest = {field: round(latest[field] - values[field], 2)
+                 for field in values
+                 if latest[field] is not None}
+    who = None
+    if target is not None:
+        row = conn.execute("SELECT username, display_name FROM users WHERE id = ?",
+                           (target,)).fetchone()
+        who = dict(row) if row else None
+    return {"days": days, "count": len(rows), "values": values,
+            "vs_latest": vs_latest, "span_hours": span, "user": who}
+
+
 @app.get("/api/summary")
-def api_summary(user: str | None = None, days: int = 30):
+def api_summary(user: str | None = None, days: int = 30, week_days: int = 7):
     since = _since(days)
     with connect() as conn:
         uid = _user_id(conn, user)
@@ -187,6 +223,8 @@ def api_summary(user: str | None = None, days: int = 30):
             f"FROM garmin_activities WHERE 1=1 {act_where} "
             f"ORDER BY start_time_local DESC LIMIT 1", act_args).fetchone()
 
+        week = _week_summary(conn, latest, uid, max(1, min(week_days, 90)))
+
     latest_d = dict(latest) if latest else None
     delta = None
     if latest_d and first_in_range:
@@ -202,6 +240,7 @@ def api_summary(user: str | None = None, days: int = 30):
         "weight_delta": delta,
         "weight": {"count": agg["n"], "min": agg["wmin"],
                    "max": agg["wmax"], "avg": agg["wavg"]},
+        "week": week,
         "activity": {"count": act["n"], "distance_m": act["dist"],
                      "moving_time_s": act["time"], "elevation_m": act["elev"],
                      "avg_heartrate": act["hr"]},

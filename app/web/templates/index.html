@@ -35,7 +35,7 @@
   </div>
 </header>
 
-<meta name="app-version" content="0.5.1">
+<meta name="app-version" content="0.6.0">
 
 <p class="stale-warn" id="staleWarn" hidden></p>
 
@@ -55,31 +55,37 @@
         <span class="kpi-label">Waga</span>
         <strong class="kpi-value" id="kpiWeight">—</strong>
         <span class="kpi-foot" id="kpiWeightDelta"></span>
+        <span class="kpi-week" id="kpiWeightWeek"></span>
       </article>
       <article class="kpi">
         <span class="kpi-label">Tkanka tłuszczowa</span>
         <strong class="kpi-value" id="kpiFat">—</strong>
         <span class="kpi-foot" id="kpiFatFoot"></span>
+        <span class="kpi-week" id="kpiFatWeek"></span>
       </article>
       <article class="kpi">
         <span class="kpi-label">Masa mięśniowa</span>
         <strong class="kpi-value" id="kpiMuscle">—</strong>
         <span class="kpi-foot" id="kpiMuscleFoot"></span>
+        <span class="kpi-week" id="kpiMuscleWeek"></span>
       </article>
       <article class="kpi">
         <span class="kpi-label">BMI</span>
         <strong class="kpi-value" id="kpiBmi">—</strong>
         <span class="kpi-foot" id="kpiBmiFoot"></span>
+        <span class="kpi-week" id="kpiBmiWeek"></span>
       </article>
       <article class="kpi">
         <span class="kpi-label">Woda</span>
         <strong class="kpi-value" id="kpiWater">—</strong>
         <span class="kpi-foot">nawodnienie organizmu</span>
+        <span class="kpi-week" id="kpiWaterWeek"></span>
       </article>
       <article class="kpi">
         <span class="kpi-label">BMR</span>
         <strong class="kpi-value" id="kpiBmr">—</strong>
         <span class="kpi-foot" id="kpiMetaAge"></span>
+        <span class="kpi-week" id="kpiBmrWeek"></span>
       </article>
     </div>
 
@@ -104,8 +110,11 @@
         <div class="chart-wrap small"><canvas id="compositionChart"></canvas></div>
       </div>
       <div class="card">
-        <div class="card-head"><h2>Szczegóły pomiaru</h2></div>
-        <dl class="detail-list" id="latestDetails"></dl>
+        <div class="card-head">
+          <h2>Szczegóły pomiaru</h2>
+          <span class="card-note" id="weekNote"></span>
+        </div>
+        <dl class="detail-list two-col" id="latestDetails"></dl>
       </div>
     </div>
   </section>
