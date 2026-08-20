@@ -20,10 +20,6 @@ log = logging.getLogger("scale")
 # Zegar wagi bywa nieustawiony (rok 1970) albo rozjechany. Ponizej tej granicy
 # ufamy wadze, powyzej bierzemy czas z Raspberry Pi.
 MAX_CLOCK_DRIFT_S = 24 * 3600
-# Gdy czas bierzemy z Pi, kazda ramka dostaje inny znacznik i klucz
-# (user_id, measured_at) przestaje wylapywac powtorki - stad osobna blokada.
-REPEAT_WINDOW_S = 180
-
 _clock_warned = False
 
 
@@ -42,33 +38,56 @@ def resolve_time(m: ScaleMeasurement, now: datetime | None = None) -> tuple[date
     return m.measured_at, None
 
 
-def _looks_like_repeat(conn, weight_kg: float, impedance, when: datetime,
-                       window_s: int = REPEAT_WINDOW_S) -> bool:
-    """Czy to ta sama ramka zlapana w kolejnym cyklu skanowania."""
-    since = (when - timedelta(seconds=window_s)).isoformat(timespec="seconds")
+def _is_repeat(conn, m: ScaleMeasurement, when: datetime, window_min: int) -> str | None:
+    """Czy waga tylko powtarza wynik, ktory juz mamy w bazie.
+
+    Waga rozglasza ostatni pomiar jeszcze dlugo po zejsciu z niej - czasem az do
+    nastepnego wazenia. Dopoki czas pochodzil z zegara wagi, powtorki zlewal klucz
+    (user_id, measured_at). Gdy zegar wagi jest nieustawiony i czas bierzemy z Pi,
+    kazda powtorka wygladalaby jak nowy pomiar, wiec odsiewamy je tutaj.
+
+    Zwraca powod odrzucenia albo None, gdy pomiar jest nowy.
+    """
+    last = conn.execute(
+        "SELECT raw_hex, measured_at FROM measurements ORDER BY measured_at DESC LIMIT 1"
+    ).fetchone()
+    if last is not None and m.raw_hex and last["raw_hex"] == m.raw_hex:
+        # Identyczne bajty co ostatnio zapisany pomiar: waga powtarza swoja
+        # ostatnia ramke. Nowe wazenie rozni sie waga albo impedancja.
+        return f"waga powtarza ramke z {last['measured_at']}"
+
+    if window_min <= 0:
+        return None
+    since = (when - timedelta(minutes=window_min)).isoformat(timespec="seconds")
     row = conn.execute(
-        """SELECT 1 FROM measurements
+        """SELECT measured_at FROM measurements
            WHERE measured_at >= ? AND ABS(weight_kg - ?) < 0.05
              AND impedance IS ?
-           LIMIT 1""",
-        (since, weight_kg, impedance)).fetchone()
-    return row is not None
+           ORDER BY measured_at DESC LIMIT 1""",
+        (since, m.weight_kg, m.impedance)).fetchone()
+    if row is not None:
+        return f"taki sam pomiar z {row['measured_at']} (okno {window_min} min)"
+    return None
 
 
 def store_measurement(conn, m: ScaleMeasurement) -> int | None:
     """Rozpoznaje uzytkownika, liczy kompozycje ciala i zapisuje pomiar."""
     global _clock_warned
     when, clock_problem = resolve_time(m)
-    if clock_problem:
-        if not _clock_warned:
-            log.warning("%s - czas pomiaru biore z zegara Raspberry Pi. "
-                        "Zegar wagi ustawia aplikacja producenta przy synchronizacji; "
-                        "bez niej to normalne i niegrozne.", clock_problem)
-            _clock_warned = True
-        if _looks_like_repeat(conn, m.weight_kg, m.impedance, when):
-            log.info("Ten sam pomiar co przed chwila (%.2f kg) - pomijam", m.weight_kg)
-            return None
+    if clock_problem and not _clock_warned:
+        log.warning("%s - czas pomiaru biore z zegara Raspberry Pi. "
+                    "Zegar wagi ustawia aplikacja producenta przy synchronizacji; "
+                    "bez niej to normalne i niegrozne.", clock_problem)
+        _clock_warned = True
+
     cfg = settings.all_values(conn)          # panel moze je zmienic w locie
+    # Bit "zszedl z wagi" nie sluzy tu za filtr: przy czesci egzemplarzy impedancja
+    # domyka sie dopiero po zejsciu i taki filtr wycialby wszystkie pomiary.
+    # Powtorki rozpoznajemy po tresci ramki, niezaleznie od tego bitu.
+    repeat = _is_repeat(conn, m, when, cfg["scale_dedupe_minutes"])
+    if repeat:
+        log.info("Pomijam %.2f kg: %s", m.weight_kg, repeat)
+        return None
     result = identify(
         conn, m.weight_kg, when,
         window_days=cfg["ident_window_days"], confidence=cfg["ident_confidence"],

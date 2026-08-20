@@ -12,6 +12,14 @@
   --bad: #d33a45;
   --shadow: 0 1px 2px rgba(16, 21, 38, .06), 0 8px 24px rgba(16, 21, 38, .06);
   --radius: 16px;
+
+  /* sklad ciala - wlasna paleta, niezalezna od kolorow interfejsu:
+     cieply bursztyn na tluszcz (to sie obserwuje), spokojna zielen na
+     miesnie (najwieksza czesc), chlodny grafit na kosci, neutral na reszte */
+  --seg-fat:    #d98324;
+  --seg-muscle: #2f8f7d;
+  --seg-bone:   #5b6b85;
+  --seg-rest:   #dfe5ef;
 }
 [data-theme="dark"] {
   --bg: #0c0f17;
@@ -25,6 +33,11 @@
   --good: #37d391;
   --bad: #ff6b74;
   --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 12px 32px rgba(0, 0, 0, .35);
+
+  --seg-fat:    #f0a44e;
+  --seg-muscle: #4cc0a8;
+  --seg-bone:   #8797b3;
+  --seg-rest:   #232c3d;
 }
 
 * { box-sizing: border-box; }

@@ -13,14 +13,16 @@ from app import __version__ as app_version
 from app import config, settings
 from app import db as db_module
 from app.web import server
-from app.db import (add_user, connect, init_db, insert_measurement,
+from app.db import (add_user, connect, delete_duplicates,
+                    find_duplicate_groups, init_db, insert_measurement,
                     latest_garmin_activity_day, repair_broken_timestamps,
                     upsert_garmin_activity, upsert_garmin_daily)
 from app.garmin import sync as garmin_sync
 from app.garmin.mapping import activity_row, daily_row, has_data
 from app.scale.body_metrics import BodyMetrics
 from app.scale.decoder import decode
-from app.scale.runner import resolve_time
+from app.scale.runner import _is_repeat as is_repeat
+from app.scale.runner import resolve_time, store_measurement
 from app.scale.identify import build_candidate, identify, t_cdf, t_ppf
 
 
@@ -583,3 +585,99 @@ class TestVersionExposed(unittest.TestCase):
         finally:
             db_module.DB_PATH = orig
             os.unlink(tmp.name)
+
+
+class TestRepeatedBroadcasts(unittest.TestCase):
+    """Waga rozglasza ostatni wynik dlugo po zejsciu - to nie sa nowe pomiary."""
+
+    def setUp(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        self.path = tmp.name
+        init_db(self.path)
+        self.conn = connect(self.path)
+        add_user(self.conn, "ruka", "Lukasz", 182, "1995-04-12", "male", 84)
+
+    def tearDown(self):
+        self.conn.close()
+        os.unlink(self.path)
+
+    def test_identical_frame_is_stored_once(self):
+        frame = _frame(year=1970, month=1, day=1)      # zegar wagi nieustawiony
+        first = store_measurement(self.conn, decode(frame))
+        self.assertIsNotNone(first)
+        for _ in range(5):                              # kolejne cykle skanowania
+            self.assertIsNone(store_measurement(self.conn, decode(frame)))
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM measurements").fetchone()[0], 1)
+
+    def test_new_weighing_is_stored(self):
+        store_measurement(self.conn, decode(_frame(year=1970, month=1, day=1)))
+        # inna waga i inna impedancja = nowe wazenie, mimo krotkiego odstepu
+        other = _frame(year=1970, month=1, day=1, impedance=613, raw_weight=12000)
+        self.assertIsNotNone(store_measurement(self.conn, decode(other)))
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM measurements").fetchone()[0], 2)
+
+    def test_window_can_be_switched_off(self):
+        """Przy oknie 0 zostaje tylko odsiewanie ramek identycznych co do bajtu."""
+        store_measurement(self.conn, decode(_frame(year=1970, month=1, day=1)))
+        now = datetime.now()
+        inna_ramka = decode(_frame(year=1970, month=1, day=1, second=30))
+        self.assertIsNotNone(is_repeat(self.conn, inna_ramka, now, 30))   # okno wlaczone
+        self.assertIsNone(is_repeat(self.conn, inna_ramka, now, 0))       # okno wylaczone
+        ta_sama = decode(_frame(year=1970, month=1, day=1))
+        self.assertIsNotNone(is_repeat(self.conn, ta_sama, now, 0))       # identyczne bajty
+
+    def test_same_values_within_window_are_skipped(self):
+        """Rozne bajty ramki, ale ta sama waga i impedancja w oknie -> powtorka."""
+        store_measurement(self.conn, decode(_frame(year=1970, month=1, day=1)))
+        again = _frame(year=1970, month=1, day=1, second=30)
+        self.assertIsNone(store_measurement(self.conn, decode(again)))
+
+
+class TestDuplicateCleanup(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        self.path = tmp.name
+        init_db(self.path)
+        self.conn = connect(self.path)
+        add_user(self.conn, "ruka", "Lukasz", 182, "1995-04-12", "male", 84)
+
+    def tearDown(self):
+        self.conn.close()
+        os.unlink(self.path)
+
+    def _add(self, minutes, weight, impedance=500):
+        when = datetime(2026, 8, 20, 7, 0, 0) + timedelta(minutes=minutes)
+        insert_measurement(self.conn, {
+            "user_id": 1, "measured_at": when.isoformat(timespec="seconds"),
+            "weight_kg": weight, "impedance": impedance})
+
+    def test_series_collapses_to_oldest(self):
+        for minute in (0, 1, 2, 5, 9):            # jedno wazenie, piec zapisow
+            self._add(minute, 84.2)
+        groups, removed = delete_duplicates(self.conn, window_minutes=60)
+        self.assertEqual((groups, removed), (1, 4))
+        left = self.conn.execute("SELECT measured_at FROM measurements").fetchall()
+        self.assertEqual(len(left), 1)
+        self.assertEqual(left[0]["measured_at"], "2026-08-20T07:00:00")
+
+    def test_separate_weighings_survive(self):
+        self._add(0, 84.2)
+        self._add(600, 84.2)                      # 10 godzin pozniej, poza oknem
+        self._add(5, 59.0, impedance=620)         # inna osoba
+        self.assertEqual(delete_duplicates(self.conn, window_minutes=60), (0, 0))
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM measurements").fetchone()[0], 3)
+
+    def test_groups_describe_what_would_be_removed(self):
+        for minute in (0, 3, 6):
+            self._add(minute, 84.2)
+        groups = find_duplicate_groups(self.conn, window_minutes=60)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["count"], 3)
+        self.assertEqual(len(groups[0]["remove"]), 2)
+        self.assertEqual(groups[0]["first"], "2026-08-20T07:00:00")
+        self.assertEqual(groups[0]["last"], "2026-08-20T07:06:00")

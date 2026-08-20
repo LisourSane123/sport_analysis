@@ -123,7 +123,8 @@ Zakładka **Panel** w dashboardzie robi z przeglądarki to, co wcześniej wymaga
 * **Wszystkie pomiary z wagi** — pełna lista bez okna czasowego, z filtrem
   „tylko nieprzypisane". Każdy wiersz można przypisać do innego profilu (skład ciała
   jest wtedy przeliczany dla nowej osoby — wzrost, wiek i płeć wchodzą do wzorów)
-  albo usunąć.
+  albo usunąć. Przycisk **Znajdź powtórki** sprząta wielokrotnie zapisane to samo
+  ważenie (patrz niżej).
 
 Kolejność źródeł ustawień: **tabela `settings` → `.env` → wartość domyślna w kodzie**.
 W `.env` zostają tylko rzeczy potrzebne przed startem procesu: MAC wagi, ścieżka bazy,
@@ -132,6 +133,29 @@ port panelu.
 Dashboard nie ma logowania, a panel zapisuje dane. Jeśli wolisz tryb tylko do odczytu,
 ustaw `ADMIN_ENABLED=0` w `.env` — endpointy zapisu zaczną zwracać 403, a panel wyświetli
 o tym informację i zablokuje formularze.
+
+## Powtórki tego samego ważenia
+
+Waga rozgłasza ostatni wynik jeszcze długo po zejściu z niej — czasem aż do następnego
+ważenia. Dopóki czas pomiaru pochodzi z zegara wagi, powtórki zlewa klucz
+`UNIQUE(user_id, measured_at)`. Gdy zegar wagi jest nieustawiony i czas bierzemy
+z Raspberry Pi, każda powtórka wyglądałaby jak nowy pomiar, dlatego odsiewa je
+`app/scale/runner.py`:
+
+1. ramka **identyczna co do bajtu** z ostatnim zapisanym pomiarem → powtórka, niezależnie
+   od tego, ile czasu minęło (nowe ważenie różni się wagą albo impedancją);
+2. ta sama waga (±0,05 kg) i ta sama impedancja w oknie `scale_dedupe_minutes`
+   (domyślnie 30 min, do zmiany w panelu; `0` wyłącza) → powtórka.
+
+Pomiary zapisane przed wersją 0.5.1 sprzątniesz przyciskiem **Znajdź powtórki** w panelu
+albo z terminala:
+
+```bash
+python3 tools/dedupe_measurements.py            # pokaże serie i zapyta
+python3 tools/dedupe_measurements.py --window 120
+```
+
+Z każdej serii zostaje **najstarszy** wpis — ten z momentu prawdziwego ważenia.
 
 ## Usługi systemd
 
@@ -187,6 +211,8 @@ Chart.js jest w repo (`app/web/static/vendor/`) — dashboard działa bez intern
 | `GET /api/garmin/daily?user=&days=` | dzienne dane: sen, HRV, tętno spoczynkowe, stres, gotowość |
 | `GET /api/summary?user=&days=` | KPI dla kafelków |
 | `GET /api/measurements/all?user=&unassigned=&limit=&offset=` | wszystkie pomiary, bez okna czasowego |
+| `GET /api/measurements/duplicates?window=` | wykryte serie powtórek |
+| `POST /api/measurements/dedupe` | usunięcie powtórek (zostaje najstarszy pomiar z serii) |
 | `PATCH /api/measurements/{id}` | zmiana przypisania pomiaru (przelicza skład ciała) |
 | `DELETE /api/measurements/{id}` | usunięcie pomiaru |
 | `GET/PUT /api/settings` | odczyt i zapis ustawień |
@@ -287,7 +313,7 @@ app/
   web/               FastAPI + dashboard (HTML, JS, Chart.js lokalnie)
 manage_users.py      kreator profili i powiązań z Garminem
   settings.py        ustawienia zmienialne z panelu (baza -> .env -> domyślne)
-tools/               update.sh oraz narzędzia jednorazowe (naprawa dat, sprzątanie po Stravie)
+tools/               update.sh oraz narzędzia jednorazowe (naprawa dat, powtórki, Strava)
 systemd/             pliki usług: waga-scale, waga-garmin, waga-dashboard
 tests/               testy bez sprzętu
 ```
@@ -309,6 +335,8 @@ tests/               testy bez sprzętu
   producenta przy synchronizacji). Taki czas jest odrzucany i pomiar dostaje czas Raspberry Pi,
   a wcześniejsze wpisy naprawiają się **automatycznie przy starcie usługi** (wersja 0.5.0+).
   Podgląd zmian przed ich wprowadzeniem: `python3 tools/fix_timestamps.py`.
+* **W panelu więcej pomiarów, niż faktycznie robiłeś** — to powtórki rozgłaszane przez
+  wagę. Kliknij *Znajdź powtórki* w panelu albo `python3 tools/dedupe_measurements.py`.
 * **Puste wykresy mimo pomiarów w bazie** — najczęściej właśnie skutek dat z 1970 roku:
   pomiary wypadają poza wybrane okno czasowe. Zrestartuj usługi (naprawa dat) albo ustaw
   zakres „wszystko" w filtrze u góry.

@@ -312,6 +312,63 @@ def get_measurement(conn, measurement_id: int):
                         (measurement_id,)).fetchone()
 
 
+def find_duplicate_groups(conn, window_minutes: int = 60) -> list[dict[str, Any]]:
+    """Grupy pomiarow, ktore sa powtorzeniem tego samego wazenia.
+
+    Waga rozglasza ostatni wynik jeszcze dlugo po zejsciu z niej. Jesli czas
+    pomiaru pochodzi z zegara Raspberry Pi (bo zegar wagi jest nieustawiony),
+    kazda taka powtorka trafia do bazy jako osobny wiersz.
+
+    Za powtorzenie uznajemy pomiar o tej samej wadze (+-0.05 kg) i tej samej
+    impedancji, ktory pojawil sie w ciagu `window_minutes` od poprzedniego.
+    W kazdej grupie zostaje najstarszy wpis - ten z momentu prawdziwego wazenia.
+    """
+    rows = conn.execute(
+        "SELECT id, user_id, measured_at, weight_kg, impedance, raw_hex "
+        "FROM measurements ORDER BY measured_at").fetchall()
+
+    groups: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for row in rows:
+        when = datetime.fromisoformat(row["measured_at"])
+        same = (current is not None
+                and abs(row["weight_kg"] - current["weight_kg"]) < 0.05
+                and row["impedance"] == current["impedance"]
+                and (when - current["last_at"]).total_seconds() <= window_minutes * 60)
+        if same:
+            current["remove"].append(row["id"])
+            current["last_at"] = when
+            current["last"] = row["measured_at"]
+            continue
+        if current is not None and current["remove"]:
+            groups.append(current)
+        current = {"keep": row["id"], "remove": [], "weight_kg": row["weight_kg"],
+                   "impedance": row["impedance"], "first": row["measured_at"],
+                   "last": row["measured_at"], "last_at": when}
+    if current is not None and current["remove"]:
+        groups.append(current)
+
+    for group in groups:
+        group.pop("last_at", None)
+        group["count"] = len(group["remove"]) + 1
+    return groups
+
+
+def delete_duplicates(conn, window_minutes: int = 60) -> tuple[int, int]:
+    """Usuwa powtorzenia, zostawiajac najstarszy pomiar z kazdej grupy.
+
+    Zwraca (liczba grup, liczba usunietych wierszy).
+    """
+    groups = find_duplicate_groups(conn, window_minutes)
+    ids = [mid for group in groups for mid in group["remove"]]
+    for chunk_start in range(0, len(ids), 500):
+        chunk = ids[chunk_start:chunk_start + 500]
+        conn.execute(f"DELETE FROM measurements WHERE id IN ({','.join('?' * len(chunk))})",
+                     chunk)
+    conn.commit()
+    return len(groups), len(ids)
+
+
 def last_measurement(conn, user_id: int | None = None):
     if user_id is None:
         return conn.execute(

@@ -146,7 +146,8 @@
         labels: ["Tłuszcz", "Mięśnie", "Kości", "Pozostałe"],
         datasets: [{
           data: [fat, muscle, bone, rest].map((v) => +v.toFixed(2)),
-          backgroundColor: [css("--accent-2"), css("--accent"), css("--muted"), css("--surface-2")],
+          backgroundColor: [css("--seg-fat"), css("--seg-muscle"),
+                            css("--seg-bone"), css("--seg-rest")],
           borderColor: css("--surface"), borderWidth: 3, hoverOffset: 6,
         }],
       },
@@ -379,6 +380,18 @@
     state.user = sel.value;
   }
 
+  function renderHealth(health) {
+    $("#healthLine").textContent =
+      `${health.measurements} pomiarów · ${health.activities} treningów · ` +
+      `Garmin: ${health.garmin_connected
+        ? `${health.garmin_days} dni${health.garmin_last_day ? ` (do ${health.garmin_last_day})` : ""}`
+        : "niepołączony"}`;
+  }
+
+  async function refreshHealth() {           // po usunieciu/zmianie pomiarow
+    try { renderHealth(await getJSON("/api/health")); } catch { /* pasek nie jest krytyczny */ }
+  }
+
   function checkVersion(health) {
     // Pliki HTML/JS czyta sie z dysku przy kazdym zadaniu, ale kod Pythona
     // siedzi w pamieci procesu az do restartu. Po `git pull` przegladarka
@@ -399,12 +412,7 @@
       getJSON("/api/health"), getJSON("/api/users"), getJSON("/api/predictions"),
     ]);
     checkVersion(health);
-
-    $("#healthLine").textContent =
-      `${health.measurements} pomiarów · ${health.activities} treningów · ` +
-      `Garmin: ${health.garmin_connected
-        ? `${health.garmin_days} dni${health.garmin_last_day ? ` (do ${health.garmin_last_day})` : ""}`
-        : "niepołączony"}`;
+    renderHealth(health);
 
     fillUserFilter(users.users, users.users.length === 1);
 
@@ -650,6 +658,35 @@
   });
   $("#adminMeasMore").addEventListener("click", () => loadAdminMeasurements(false));
 
+  $("#dedupeBtn").addEventListener("click", async () => {
+    const btn = $("#dedupeBtn");
+    btn.disabled = true;
+    try {
+      const found = await getJSON("/api/measurements/duplicates?window=60");
+      if (!found.duplicates) {
+        say("#adminMeasMsg", "Nie ma powtórek — każdy pomiar jest inny.", "ok");
+        return;
+      }
+      const ok = confirm(
+        `Znalazłem ${found.duplicates} powtórek w ${found.groups.length} seriach ` +
+        `(z ${found.total_measurements} pomiarów).\n\n` +
+        `To ta sama waga i impedancja złapana wielokrotnie — waga rozgłasza ostatni ` +
+        `wynik długo po zejściu z niej.\n\n` +
+        `Z każdej serii zostanie najstarszy pomiar. Usunąć ${found.duplicates} wierszy?`);
+      if (!ok) return;
+      const result = await sendJSON("/api/measurements/dedupe", "POST", { window: 60 });
+      say("#adminMeasMsg",
+          `Usunięto ${result.removed} powtórek z ${result.groups} serii.`, "ok");
+      await loadAdmin();
+      await refresh();
+      await refreshHealth();
+    } catch (err) {
+      say("#adminMeasMsg", err.message, "err");
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   $("#adminMeasTable").addEventListener("change", async (e) => {
     const id = e.target.dataset.assign;
     if (!id) return;
@@ -675,6 +712,7 @@
       say("#adminMeasMsg", `Usunięto pomiar #${id}.`, "ok");
       await loadAdminMeasurements();
       await refresh();
+      await refreshHealth();
     } catch (err) { say("#adminMeasMsg", err.message, "err"); }
   });
 

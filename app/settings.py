@@ -45,6 +45,11 @@ SETTINGS: tuple[Setting, ...] = (
             config.SCAN_INTERVAL, 0, 300, " s",
             "Krotsza przerwa = mniejsza szansa przegapienia wazenia, kosztem "
             "zuzycia radia Bluetooth."),
+    Setting("scale_dedupe_minutes", "Okno odrzucania powtorek", "Skanowanie wagi", "int",
+            30, 0, 720, " min",
+            "Waga powtarza ostatni wynik jeszcze dlugo po zejsciu z niej. Pomiar o tej "
+            "samej wadze i impedancji, zlapany w tym oknie, jest uznawany za te sama "
+            "powtorke i nie trafia do bazy. 0 wylacza mechanizm."),
     Setting("ident_window_days", "Okno historii", "Rozpoznawanie osoby", "int",
             config.IDENT_WINDOW_DAYS, 1, 90, " dni",
             "Z ilu dni wstecz liczony jest przedzial predykcyjny profilu."),

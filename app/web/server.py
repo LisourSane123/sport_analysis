@@ -13,9 +13,10 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__, config, settings
-from app.db import (add_user, connect, delete_measurement, delete_user,
-                    get_measurement, get_user, get_user_by_id, init_db,
-                    update_measurement, update_user)
+from app.db import (add_user, connect, delete_duplicates, delete_measurement,
+                    delete_user, find_duplicate_groups, get_measurement,
+                    get_user, get_user_by_id, init_db, update_measurement,
+                    update_user)
 from app.scale.body_metrics import composition_for
 
 BASE = Path(__file__).resolve().parent
@@ -341,6 +342,25 @@ def api_measurements_all(user: str | None = None, unassigned: bool = False,
                 {where} ORDER BY m.measured_at DESC LIMIT ? OFFSET ?""",
             [*args, limit, offset]).fetchall())
     return {"measurements": rows, "total": total, "limit": limit, "offset": offset}
+
+
+@app.get("/api/measurements/duplicates")
+def api_duplicates(window: int = Query(60, ge=1, le=1440)):
+    """Powtorzone wazenia: waga rozglasza ostatni wynik dlugo po zejsciu z niej."""
+    with connect() as conn:
+        groups = find_duplicate_groups(conn, window)
+        total = conn.execute("SELECT COUNT(*) c FROM measurements").fetchone()["c"]
+    return {"groups": groups, "total_measurements": total,
+            "duplicates": sum(len(g["remove"]) for g in groups), "window_minutes": window}
+
+
+@app.post("/api/measurements/dedupe")
+def api_dedupe(window: int = Body(60, embed=True)):
+    """Usuwa powtorki, zostawiajac najstarszy pomiar z kazdej serii."""
+    _admin_guard()
+    with connect() as conn:
+        groups, removed = delete_duplicates(conn, max(1, min(window, 1440)))
+    return {"groups": groups, "removed": removed}
 
 
 @app.patch("/api/measurements/{measurement_id}")
