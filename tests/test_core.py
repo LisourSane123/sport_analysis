@@ -7,7 +7,11 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta
 
-from app import config
+from fastapi.testclient import TestClient
+
+from app import config, settings
+from app import db as db_module
+from app.web import server
 from app.db import (add_user, connect, init_db, insert_measurement,
                     latest_garmin_activity_day, upsert_garmin_activity,
                     upsert_garmin_daily)
@@ -15,6 +19,7 @@ from app.garmin import sync as garmin_sync
 from app.garmin.mapping import activity_row, daily_row, has_data
 from app.scale.body_metrics import BodyMetrics
 from app.scale.decoder import decode
+from app.scale.runner import resolve_time
 from app.scale.identify import build_candidate, identify, t_cdf, t_ppf
 
 
@@ -294,11 +299,9 @@ class TestGarminStorage(unittest.TestCase):
         self.path = tmp.name
         init_db(self.path)
         self.conn = connect(self.path)
-        self.pause = config.GARMIN_REQUEST_PAUSE
-        config.GARMIN_REQUEST_PAUSE = 0.0
+        settings.save(self.conn, {"garmin_request_pause": 0.0})
 
     def tearDown(self):
-        config.GARMIN_REQUEST_PAUSE = self.pause
         self.conn.close()
         os.unlink(self.path)
 
@@ -347,3 +350,170 @@ class TestGarminStorage(unittest.TestCase):
         self.assertEqual(result["new_activities"], 1)
         self.assertIsNone(self.conn.execute(
             "SELECT user_id FROM garmin_activities").fetchone()["user_id"])
+
+
+# --------------------------------------------------------------------------
+# Zegar wagi
+# --------------------------------------------------------------------------
+def _frame(year=2026, month=8, day=20, hour=7, minute=31, second=12,
+           ctrl0=0x02, ctrl1=0x22, impedance=512, raw_weight=17670):
+    return (bytes([ctrl0, ctrl1]) + year.to_bytes(2, "little")
+            + bytes([month, day, hour, minute, second])
+            + impedance.to_bytes(2, "little") + raw_weight.to_bytes(2, "little"))
+
+
+class TestScaleClock(unittest.TestCase):
+    def test_unset_clock_is_rejected(self):
+        """Rok 1970 to nieustawiony zegar wagi, nie data pomiaru."""
+        m = decode(_frame(year=1970, month=1, day=1, hour=0, minute=0, second=0))
+        self.assertIsNone(m.measured_at)
+        self.assertEqual(m.scale_clock, datetime(1970, 1, 1))
+        self.assertFalse(m.clock_ok)
+
+    def test_year_2000_is_rejected_too(self):
+        self.assertIsNone(decode(_frame(year=2000, month=1, day=1)).measured_at)
+
+    def test_sane_clock_is_kept(self):
+        m = decode(_frame())
+        self.assertEqual(m.measured_at, datetime(2026, 8, 20, 7, 31, 12))
+        self.assertTrue(m.clock_ok)
+
+    def test_fallback_to_pi_clock(self):
+        now = datetime(2026, 8, 20, 18, 0, 0)
+        when, problem = resolve_time(decode(_frame(year=1970, month=1, day=1)), now)
+        self.assertEqual(when, now)
+        self.assertIn("nieustawiony", problem)
+
+    def test_drifted_clock_is_rejected(self):
+        now = datetime(2026, 8, 20, 18, 0, 0)
+        when, problem = resolve_time(decode(_frame(year=2024)), now)
+        self.assertEqual(when, now)
+        self.assertIn("rozjechany", problem)
+
+    def test_small_drift_is_accepted(self):
+        now = datetime(2026, 8, 20, 18, 0, 0)          # ramka jest z 7:31 tego dnia
+        when, problem = resolve_time(decode(_frame()), now)
+        self.assertEqual(when, datetime(2026, 8, 20, 7, 31, 12))
+        self.assertIsNone(problem)
+
+
+class TestSettings(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        self.path = tmp.name
+        init_db(self.path)
+        self.conn = connect(self.path)
+
+    def tearDown(self):
+        self.conn.close()
+        os.unlink(self.path)
+
+    def test_defaults_come_from_env(self):
+        self.assertEqual(settings.get(self.conn, "scan_duration"), config.SCAN_DURATION)
+
+    def test_saved_value_wins(self):
+        settings.save(self.conn, {"scan_duration": 45})
+        self.assertEqual(settings.get(self.conn, "scan_duration"), 45)
+        self.assertEqual(settings.all_values(self.conn)["scan_duration"], 45)
+
+    def test_out_of_range_is_rejected(self):
+        with self.assertRaises(ValueError):
+            settings.save(self.conn, {"scan_duration": 9999})
+        self.assertEqual(settings.get(self.conn, "scan_duration"), config.SCAN_DURATION)
+
+    def test_unknown_key_is_rejected(self):
+        with self.assertRaises(ValueError):
+            settings.save(self.conn, {"nie_ma_takiego": 1})
+
+    def test_reset_restores_env_value(self):
+        settings.save(self.conn, {"scan_interval": 3})
+        settings.reset(self.conn, "scan_interval")
+        self.assertEqual(settings.get(self.conn, "scan_interval"), config.SCAN_INTERVAL)
+
+    def test_broken_row_does_not_break_service(self):
+        """Recznie zepsuty wpis w bazie nie moze polozyc petli skanowania."""
+        self.conn.execute("INSERT INTO settings (key, value) VALUES ('scan_duration','abc')")
+        self.conn.commit()
+        self.assertEqual(settings.get(self.conn, "scan_duration"), config.SCAN_DURATION)
+
+
+class TestAdminApi(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        self.path = tmp.name
+        self._orig_db = db_module.DB_PATH
+        db_module.DB_PATH = self.path          # connect() czyta to przy wywolaniu
+        init_db(self.path)
+        self.client = TestClient(server.app)
+
+    def tearDown(self):
+        db_module.DB_PATH = self._orig_db
+        os.unlink(self.path)
+
+    def _user(self, username="ruka", **kw):
+        payload = {"username": username, "display_name": "Lukasz", "height_cm": 182,
+                   "birthdate": "1995-04-12", "sex": "male", "ref_weight": 84}
+        payload.update(kw)
+        return self.client.post("/api/users", json=payload)
+
+    def test_create_and_duplicate_user(self):
+        self.assertEqual(self._user().status_code, 200)
+        self.assertEqual(self._user().status_code, 409)
+
+    def test_missing_fields_are_reported(self):
+        resp = self.client.post("/api/users", json={"username": "x"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("display_name", resp.json()["detail"])
+
+    def test_reassign_recomputes_body_composition(self):
+        self._user()
+        with connect(self.path) as conn:
+            insert_measurement(conn, {"user_id": None, "measured_at": "2026-08-20T07:00:00",
+                                      "weight_kg": 84.0, "impedance": 500})
+        resp = self.client.patch("/api/measurements/1", json={"username": "ruka"})
+        self.assertEqual(resp.status_code, 200)
+        row = self.client.get("/api/measurements/all").json()["measurements"][0]
+        self.assertEqual(row["username"], "ruka")
+        self.assertEqual(row["identify_method"], "manual")
+        self.assertIsNotNone(row["bmi"])
+        self.assertIsNotNone(row["fat_percentage"])
+
+    def test_unassign_clears_body_composition(self):
+        """Sklad ciala policzony dla jednej osoby nie moze zostac przy innej."""
+        self._user()
+        with connect(self.path) as conn:
+            insert_measurement(conn, {"user_id": None, "measured_at": "2026-08-20T07:00:00",
+                                      "weight_kg": 84.0, "impedance": 500})
+        self.client.patch("/api/measurements/1", json={"username": "ruka"})
+        self.client.patch("/api/measurements/1", json={"username": None})
+        row = self.client.get("/api/measurements/all").json()["measurements"][0]
+        self.assertIsNone(row["user_id"])
+        self.assertIsNone(row["bmi"])
+        self.assertIsNone(row["fat_percentage"])
+
+    def test_measurements_all_paginates_and_counts(self):
+        self._user()
+        with connect(self.path) as conn:
+            for i in range(5):
+                insert_measurement(conn, {"user_id": 1, "measured_at": f"2026-08-1{i}T07:00:00",
+                                          "weight_kg": 84.0 + i})
+        data = self.client.get("/api/measurements/all?limit=2&offset=0").json()
+        self.assertEqual(data["total"], 5)
+        self.assertEqual(len(data["measurements"]), 2)
+
+    def test_settings_roundtrip_over_http(self):
+        self.assertEqual(self.client.put("/api/settings",
+                                         json={"scan_interval": 7}).status_code, 200)
+        self.assertEqual(self.client.get("/api/settings").json()["values"]["scan_interval"], 7)
+        self.assertEqual(self.client.put("/api/settings",
+                                         json={"scan_interval": 99999}).status_code, 400)
+
+    def test_admin_can_be_switched_off(self):
+        server.config.ADMIN_ENABLED = False
+        try:
+            self.assertEqual(self._user("nowy").status_code, 403)
+            self.assertEqual(self.client.get("/api/settings").status_code, 200)  # odczyt dziala
+        finally:
+            server.config.ADMIN_ENABLED = True

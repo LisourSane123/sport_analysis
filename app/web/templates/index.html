@@ -40,6 +40,7 @@
   <button class="tab" data-tab="runs">Biegi</button>
   <button class="tab" data-tab="history">Historia</button>
   <button class="tab" data-tab="forecast">Predykcje</button>
+  <button class="tab" data-tab="admin">Panel</button>
 </nav>
 
 <main>
@@ -181,6 +182,80 @@
       <p class="hint">Miejsce gotowe: dane wystawia <code>GET /api/predictions</code>,
         wykres wstawimy w ramkę poniżej.</p>
       <div class="chart-wrap ghost"><span>obszar wykresu prognozy</span></div>
+    </div>
+  </section>
+
+  <!-- ============ PANEL ============ -->
+  <section class="panel" id="tab-admin">
+    <p class="admin-warn" id="adminWarn" hidden>
+      Panel działa w trybie tylko do odczytu (<code>ADMIN_ENABLED=0</code> w <code>.env</code>).
+    </p>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Profile</h2>
+        <button class="btn" id="userAddBtn">Dodaj profil</button>
+      </div>
+      <form class="admin-form" id="userForm" hidden>
+        <input type="hidden" id="userFormMode" value="add">
+        <label class="field">Login<input id="fUsername" placeholder="np. lukasz" required></label>
+        <label class="field">Imię<input id="fDisplay" placeholder="np. Łukasz" required></label>
+        <label class="field">Płeć
+          <select id="fSex"><option value="male">mężczyzna</option><option value="female">kobieta</option></select>
+        </label>
+        <label class="field">Wzrost [cm]<input id="fHeight" type="number" min="90" max="220" step="1" required></label>
+        <label class="field">Data urodzenia<input id="fBirth" type="date" required></label>
+        <label class="field">Waga startowa [kg]<input id="fWeight" type="number" min="10" max="300" step="0.1"></label>
+        <label class="field">Profil Garmina<input id="fGarmin" placeholder="opcjonalnie"></label>
+        <div class="form-actions">
+          <button class="btn primary" id="userSaveBtn" type="submit">Zapisz</button>
+          <button class="btn" id="userCancelBtn" type="button">Anuluj</button>
+        </div>
+      </form>
+      <div class="table-wrap">
+        <table id="usersTable">
+          <thead><tr><th>Login</th><th>Imię</th><th>Płeć</th><th>Wzrost</th><th>Ur.</th><th>Start [kg]</th><th>Garmin</th><th>Pomiary</th><th>Ostatni</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Ustawienia</h2>
+        <span class="card-note">zmiany działają bez restartu usług</span>
+      </div>
+      <form id="settingsForm"></form>
+      <div class="form-actions">
+        <button class="btn primary" id="settingsSaveBtn">Zapisz ustawienia</button>
+        <button class="btn" id="settingsResetBtn">Przywróć wartości z .env</button>
+        <span class="form-msg" id="settingsMsg"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Wszystkie pomiary z wagi</h2>
+        <div class="card-tools">
+          <label class="field inline">
+            <select id="adminMeasFilter">
+              <option value="all">wszystkie</option>
+              <option value="unassigned">tylko nieprzypisane</option>
+            </select>
+          </label>
+          <span class="card-note" id="adminMeasCount"></span>
+        </div>
+      </div>
+      <div class="table-wrap tall">
+        <table id="adminMeasTable">
+          <thead><tr><th>#</th><th>Data pomiaru</th><th>Zapisany</th><th>Waga</th><th>Impedancja</th><th>Tłuszcz</th><th>Metoda</th><th>Profil</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="form-actions">
+        <button class="btn" id="adminMeasMore">Pokaż więcej</button>
+        <span class="form-msg" id="adminMeasMsg"></span>
+      </div>
     </div>
   </section>
 </main>

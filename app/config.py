@@ -43,6 +43,10 @@ DB_PATH = Path(_db) if Path(_db).is_absolute() else PROJECT_ROOT / _db
 # --- web ---
 WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT = _int("WEB_PORT", 11230)
+# Panel administracyjny pozwala zmieniac dane przez HTTP, a dashboard nie ma
+# logowania - ustaw 0, jesli panel ma byc tylko do odczytu.
+ADMIN_ENABLED = (os.getenv("ADMIN_ENABLED", "1").strip().lower()
+                 not in ("0", "false", "no", "off"))
 
 # --- garmin (nieoficjalne API Garmin Connect przez biblioteke garminconnect) ---
 GARMIN_EMAIL = (os.getenv("GARMIN_EMAIL") or "").strip()

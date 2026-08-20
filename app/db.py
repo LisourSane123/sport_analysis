@@ -124,11 +124,19 @@ CREATE TABLE IF NOT EXISTS garmin_daily (
 
 CREATE INDEX IF NOT EXISTS idx_gdaily_day ON garmin_daily (day);
 
+CREATE TABLE IF NOT EXISTS settings (
+    key        TEXT PRIMARY KEY,           -- np. scan_interval, ident_confidence
+    value      TEXT NOT NULL,              -- zawsze tekst, typ pilnuje app/settings.py
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 """
 
 
-def connect(db_path: Path | str = DB_PATH) -> sqlite3.Connection:
-    path = Path(db_path)
+def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
+    # DB_PATH czytane przy wywolaniu, nie przy imporcie - inaczej nie da sie
+    # podmienic sciezki w testach ani wskazac innej bazy w locie.
+    path = Path(db_path if db_path is not None else DB_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, timeout=30)
     conn.row_factory = sqlite3.Row
@@ -136,7 +144,7 @@ def connect(db_path: Path | str = DB_PATH) -> sqlite3.Connection:
     return conn
 
 
-def init_db(db_path: Path | str = DB_PATH) -> None:
+def init_db(db_path: Path | str | None = None) -> None:
     with connect(db_path) as conn:
         conn.executescript(SCHEMA)
         _migrate(conn)
@@ -184,6 +192,28 @@ def get_user(conn, username: str):
     return conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
 
 
+USER_EDITABLE = ("display_name", "height_cm", "birthdate", "sex", "ref_weight",
+                 "garmin_profile_id")
+
+
+def update_user(conn, username: str, changes: dict[str, Any]) -> int:
+    """Aktualizuje wybrane pola profilu. Zwraca liczbe zmienionych wierszy."""
+    fields = {k: v for k, v in changes.items() if k in USER_EDITABLE}
+    if not fields:
+        return 0
+    sql = ",".join(f"{k} = ?" for k in fields)
+    cur = conn.execute(f"UPDATE users SET {sql} WHERE username = ?",
+                       [*fields.values(), username])
+    conn.commit()
+    return cur.rowcount
+
+
+def get_user_by_id(conn, user_id: int | None):
+    if user_id is None:
+        return None
+    return conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+
+
 def delete_user(conn, username: str) -> int:
     cur = conn.execute("DELETE FROM users WHERE username = ?", (username,))
     conn.commit()
@@ -215,6 +245,30 @@ def insert_measurement(conn, data: dict[str, Any]) -> int | None:
     cur = conn.execute(sql, [data[c] for c in cols])
     conn.commit()
     return cur.lastrowid if cur.rowcount else None
+
+
+def update_measurement(conn, measurement_id: int, changes: dict[str, Any]) -> int:
+    """Zmienia wybrane kolumny pomiaru (przypisanie osoby, sklad ciala)."""
+    allowed = set(MEASUREMENT_FIELDS) | {"measured_at"}
+    fields = {k: v for k, v in changes.items() if k in allowed}
+    if not fields:
+        return 0
+    sql = ",".join(f"{k} = ?" for k in fields)
+    cur = conn.execute(f"UPDATE measurements SET {sql} WHERE id = ?",
+                       [*fields.values(), measurement_id])
+    conn.commit()
+    return cur.rowcount
+
+
+def delete_measurement(conn, measurement_id: int) -> int:
+    cur = conn.execute("DELETE FROM measurements WHERE id = ?", (measurement_id,))
+    conn.commit()
+    return cur.rowcount
+
+
+def get_measurement(conn, measurement_id: int):
+    return conn.execute("SELECT * FROM measurements WHERE id = ?",
+                        (measurement_id,)).fetchone()
 
 
 def last_measurement(conn, user_id: int | None = None):

@@ -181,3 +181,76 @@ code { background: var(--surface-2); padding: 2px 6px; border-radius: 6px; font-
   .field { flex: 1; }
   .kpi-value { font-size: 23px; }
 }
+
+/* ---------- panel administracyjny ---------- */
+.admin-warn {
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--bad) 35%, var(--border));
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin: 0 0 18px;
+  font-size: 13.5px;
+}
+.card-note { font-size: 12px; color: var(--muted); }
+.card-tools { display: flex; align-items: center; gap: 12px; }
+
+.btn {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 7px 13px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.danger:hover { border-color: var(--bad); color: var(--bad); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn.small { padding: 4px 9px; font-size: 12px; }
+
+input, .admin-form select {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 13.5px;
+}
+input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* klasa z display:grid wygrywa z [hidden] w arkuszu przegladarki */
+[hidden] { display: none !important; }
+
+.admin-form, .settings-group-fields {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  margin-bottom: 16px;
+}
+.admin-form .field, .settings-group-fields .field { gap: 5px; }
+.form-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.form-msg { font-size: 12.5px; color: var(--muted); }
+.form-msg.ok { color: var(--good); }
+.form-msg.err { color: var(--bad); }
+
+.settings-group { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
+.settings-group:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
+.settings-group h3 {
+  margin: 0 0 12px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+}
+.setting-help { font-size: 11.5px; color: var(--muted); line-height: 1.35; }
+.setting-changed input { border-color: var(--accent-2); }
+
+.table-wrap.tall { max-height: 560px; }
+td.actions { white-space: nowrap; text-align: right; }
+td.actions .btn + .btn { margin-left: 6px; }
+td select { font-size: 12.5px; padding: 3px 6px; }
+.row-dim td { color: var(--muted); }

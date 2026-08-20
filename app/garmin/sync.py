@@ -19,7 +19,7 @@ import logging
 import time
 from datetime import date, datetime, timedelta
 
-from app import config
+from app import config, settings
 from app.db import (connect, init_db, latest_garmin_activity_day,
                     upsert_garmin_activity, upsert_garmin_daily,
                     user_id_for_garmin)
@@ -31,8 +31,8 @@ log = logging.getLogger("garmin.sync")
 EPOCH_START = "2000-01-01"
 
 
-def _pause() -> None:
-    time.sleep(max(0.0, config.GARMIN_REQUEST_PAUSE))
+def _pause(seconds: float | None = None) -> None:
+    time.sleep(max(0.0, config.GARMIN_REQUEST_PAUSE if seconds is None else seconds))
 
 
 def _days_back(days: int) -> str:
@@ -47,7 +47,8 @@ def sync_activities(conn, api, profile: str, user_id: int | None,
         last = latest_garmin_activity_day(conn, profile)
         # dzien wstecz, bo aktywnosc z konca dnia moze dojechac pozniej
         start = ((datetime.strptime(last, "%Y-%m-%d") - timedelta(days=1)).date()
-                 .isoformat() if last else _days_back(config.GARMIN_BACKFILL_DAYS))
+                 .isoformat() if last else _days_back(
+                     settings.get(conn, "garmin_backfill_days")))
     log.info("Aktywnosci od %s", start)
 
     activities = call(api.get_activities_by_date, start, date.today().isoformat(),
@@ -64,20 +65,20 @@ def sync_activities(conn, api, profile: str, user_id: int | None,
 
 
 def sync_day(conn, api, profile: str, user_id: int | None, day: str,
-             quick: bool = False) -> bool:
+             quick: bool = False, pause: float | None = None) -> bool:
     """Jeden dzien: podsumowanie + (opcjonalnie) sen, HRV, gotowosc, VO2max."""
     stats = call(api.get_stats, day, default={}, what=f"stats {day}")
-    _pause()
+    _pause(pause)
     sleep = hrv = readiness = metrics = None
     if not quick:
         sleep = call(api.get_sleep_data, day, what=f"sleep {day}")
-        _pause()
+        _pause(pause)
         hrv = call(api.get_hrv_data, day, what=f"hrv {day}")
-        _pause()
+        _pause(pause)
         readiness = call(api.get_training_readiness, day, what=f"readiness {day}")
-        _pause()
+        _pause(pause)
         metrics = call(api.get_max_metrics, day, what=f"max_metrics {day}")
-        _pause()
+        _pause(pause)
 
     row = daily_row(day, profile, user_id, stats=stats, sleep=sleep, hrv=hrv,
                     readiness=readiness, max_metrics=metrics)
@@ -89,16 +90,16 @@ def sync_day(conn, api, profile: str, user_id: int | None, day: str,
 
 
 def sync_daily(conn, api, profile: str, user_id: int | None,
-               days: int, quick: bool = False) -> int:
+               days: int, quick: bool = False, pause: float | None = None) -> int:
     """Ostatnie `days` dni wstecz od dzisiaj. Zwraca liczbe zapisanych dni."""
     if not quick and days > 60:
+        every = config.GARMIN_REQUEST_PAUSE if pause is None else pause
         log.warning("%d dni x 5 zapytan - to potrwa okolo %d min. "
-                    "Szybciej: --quick", days, int(days * 5 * max(
-                        config.GARMIN_REQUEST_PAUSE, 0.2) / 60) + 1)
+                    "Szybciej: --quick", days, int(days * 5 * max(every, 0.2) / 60) + 1)
     saved = 0
     for offset in range(days, -1, -1):
         day = (date.today() - timedelta(days=offset)).isoformat()
-        if sync_day(conn, api, profile, user_id, day, quick):
+        if sync_day(conn, api, profile, user_id, day, quick, pause):
             saved += 1
         if saved and saved % 25 == 0:
             log.info("... %d dni zapisanych (ostatni: %s)", saved, day)
@@ -112,7 +113,7 @@ def _daily_window(conn, profile: str, requested: int | None) -> int:
     last = conn.execute("SELECT MAX(day) FROM garmin_daily WHERE profile_id = ?",
                         (profile,)).fetchone()[0]
     if not last:
-        return config.GARMIN_BACKFILL_DAYS
+        return settings.get(conn, "garmin_backfill_days")
     gap = (date.today() - datetime.strptime(last, "%Y-%m-%d").date()).days
     # zawsze odswiezamy 2 ostatnie dni - sen i HRV dopisuja sie z opoznieniem
     return min(max(gap, 2), 365)
@@ -122,6 +123,7 @@ def sync(conn, api=None, *, days: int | None = None, all_history: bool = False,
          do_activities: bool = True, do_daily: bool = True,
          quick: bool = False) -> dict[str, int]:
     api = api or login()
+    cfg = settings.all_values(conn)           # panel moze je zmienic bez restartu
     profile = profile_id(api)
     user_id = user_id_for_garmin(conn, profile)
     if user_id is None:
@@ -135,7 +137,8 @@ def sync(conn, api=None, *, days: int | None = None, all_history: bool = False,
         result["new_activities"], result["updated_activities"] = new, updated
     if do_daily:
         window = 365 if all_history else _daily_window(conn, profile, days)
-        result["days"] = sync_daily(conn, api, profile, user_id, window, quick)
+        result["days"] = sync_daily(conn, api, profile, user_id, window, quick,
+                                    cfg["garmin_request_pause"])
     return result
 
 
@@ -177,7 +180,7 @@ def main() -> None:
             if not args.loop:
                 break
             days, all_history = None, False      # kolejne przebiegi przyrostowo
-            time.sleep(max(300, config.GARMIN_SYNC_INTERVAL))
+            time.sleep(max(300, settings.get(conn, "garmin_sync_interval")))
     except KeyboardInterrupt:
         log.info("Zatrzymano.")
     finally:

@@ -94,6 +94,29 @@ kolumna ma listę kandydatów w `app/garmin/mapping.py`, a pełna odpowiedź tra
 `raw_json` — nawet po zmianie nazwy dane nie przepadają, wystarczy dopisać nowy klucz
 i puścić sync ponownie.
 
+## Panel administracyjny
+
+Zakładka **Panel** w dashboardzie robi z przeglądarki to, co wcześniej wymagało SSH:
+
+* **Profile** — dodawanie, edycja i usuwanie (usunięcie profilu zostawia pomiary w bazie
+  jako nieprzypisane, nic nie znika).
+* **Ustawienia** — częstotliwość skanów, parametry rozpoznawania osoby i ustawienia
+  Garmina. Zapis trafia do tabeli `settings`, a usługi czytają ją na początku każdego
+  cyklu — **zmiana działa bez restartu**. Przycisk *Przywróć wartości z .env* kasuje
+  wpisy z bazy.
+* **Wszystkie pomiary z wagi** — pełna lista bez okna czasowego, z filtrem
+  „tylko nieprzypisane". Każdy wiersz można przypisać do innego profilu (skład ciała
+  jest wtedy przeliczany dla nowej osoby — wzrost, wiek i płeć wchodzą do wzorów)
+  albo usunąć.
+
+Kolejność źródeł ustawień: **tabela `settings` → `.env` → wartość domyślna w kodzie**.
+W `.env` zostają tylko rzeczy potrzebne przed startem procesu: MAC wagi, ścieżka bazy,
+port panelu.
+
+Dashboard nie ma logowania, a panel zapisuje dane. Jeśli wolisz tryb tylko do odczytu,
+ustaw `ADMIN_ENABLED=0` w `.env` — endpointy zapisu zaczną zwracać 403, a panel wyświetli
+o tym informację i zablokuje formularze.
+
 ## Usługi systemd
 
 | Usługa | Co robi |
@@ -116,6 +139,7 @@ journalctl -u waga-scale -f
 | `measurements` | pomiary z wagi + wyliczona kompozycja ciała (klucz `user_id + measured_at` chroni przed duplikatami) |
 | `garmin_activities` | treningi z Garmina (klucz: `activityId`) — dystans, tętno, moc, training effect, pełny JSON |
 | `garmin_daily` | jeden wiersz na dobę (klucz: `profile_id + day`) — kroki, kalorie, tętno spoczynkowe, stres, body battery, sen, HRV, gotowość, VO2max |
+| `settings` | ustawienia zmienione w panelu (`klucz → wartość`); brak wpisu = wartość z `.env` |
 
 Kolumny pomiaru: `weight_kg`, `impedance`, `bmi`, `fat_percentage`, `water_percentage`,
 `muscle_mass`, `bone_mass`, `visceral_fat`, `protein_percentage`, `lbm`, `bmr`,
@@ -146,6 +170,12 @@ Chart.js jest w repo (`app/web/static/vendor/`) — dashboard działa bez intern
 | `GET /api/activities?days=&sport=&user=` | treningi z Garmina |
 | `GET /api/garmin/daily?user=&days=` | dzienne dane: sen, HRV, tętno spoczynkowe, stres, gotowość |
 | `GET /api/summary?user=&days=` | KPI dla kafelków |
+| `GET /api/measurements/all?user=&unassigned=&limit=&offset=` | wszystkie pomiary, bez okna czasowego |
+| `PATCH /api/measurements/{id}` | zmiana przypisania pomiaru (przelicza skład ciała) |
+| `DELETE /api/measurements/{id}` | usunięcie pomiaru |
+| `GET/PUT /api/settings` | odczyt i zapis ustawień |
+| `POST /api/settings/reset` | powrót do wartości z `.env` |
+| `GET /api/admin/users`, `POST /api/users`, `PATCH/DELETE /api/users/{username}` | zarządzanie profilami |
 | `GET /api/predictions` | **placeholder** modułu predykcji (`available: false`) |
 | `GET /api/docs` | interaktywna dokumentacja OpenAPI |
 
@@ -203,6 +233,7 @@ tabele `activities` i `strava_tokens`; nic nie psują, ale można je usunąć:
 ```bash
 sqlite3 data/waga.db ".backup data/waga-kopia.db"   # najpierw kopia!
 python3 tools/drop_strava.py                        # pokaże, co usuwa, i zapyta
+python3 tools/fix_timestamps.py                     # naprawa dat z 1970 roku
 ```
 
 ## Prywatność i bezpieczeństwo repozytorium
@@ -233,13 +264,14 @@ za VPN-em (WireGuard, Tailscale), nie na przekierowanym porcie routera.
 
 ```
 app/
-  config.py          ustawienia z .env
+  config.py          konfiguracja startowa z .env
   db.py              schemat SQLite, migracje, zapisy
   scale/             BLE: skan, dekoder ramek, skład ciała, rozpoznawanie osoby
   garmin/            Garmin Connect: logowanie, mapowanie pól, sync
   web/               FastAPI + dashboard (HTML, JS, Chart.js lokalnie)
 manage_users.py      kreator profili i powiązań z Garminem
-tools/               narzędzia jednorazowe (np. czyszczenie po Stravie)
+  settings.py        ustawienia zmienialne z panelu (baza -> .env -> domyślne)
+tools/               narzędzia jednorazowe (naprawa dat, czyszczenie po Stravie)
 systemd/             pliki usług: waga-scale, waga-garmin, waga-dashboard
 tests/               testy bez sprzętu
 ```
@@ -257,6 +289,9 @@ tests/               testy bez sprzętu
 * **Brak uprawnień do BLE** — `sudo setcap 'cap_net_raw,cap_net_admin+eip' $(readlink -f .venv/bin/python)`.
 * **Pomiar bez składu ciała** — waga nie zmierzyła impedancji (bose stopy!) albo pomiaru
   nie udało się przypisać do profilu; zapisuje się wtedy sam `weight_kg`.
+* **Data pomiaru z 1970 roku** — waga ma nieustawiony zegar (ustawia go dopiero aplikacja
+  producenta przy synchronizacji). Od tej wersji taki czas jest odrzucany i pomiar dostaje
+  czas Raspberry Pi; wcześniejsze wpisy naprawisz przez `python3 tools/fix_timestamps.py`.
 * **Pomiar trafił do złego profilu** — sprawdź zakładkę Historia (kolumna *Profil* pokazuje
   metodę i zapas w kg). Przy dwóch osobach o podobnej wadze zmniejsz `IDENT_CONFIDENCE`
   do 0.9 (węższe przedziały) albo skróć `IDENT_WINDOW_DAYS`.

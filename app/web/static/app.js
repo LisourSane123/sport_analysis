@@ -232,6 +232,7 @@
     fallback_last: ["najbliższy", "poza przedziałami — przypisany do najbliższej ostatniej wagi"],
     fallback_ref: ["startowa", "poza przedziałami — przypisany po wadze startowej profilu"],
     unassigned: ["brak", "nie pasował do żadnego profilu"],
+    manual: ["ręcznie", "przypisany ręcznie w panelu"],
   };
 
   function identBadge(m) {
@@ -241,6 +242,13 @@
     const who = m.user_display || "nieprzypisany";
     return `<span title="${title}${score ? ` (${score.trim()})` : ""}">${who}
             <em class="badge ${m.identify_method || "unassigned"}">${label}${score}</em></span>`;
+  }
+
+  function identBadgeOnly(m) {                  // w panelu imie jest w osobnej kolumnie
+    const [label, title] = IDENT_LABEL[m.identify_method] || ["—", ""];
+    const score = (m.identify_score === null || m.identify_score === undefined)
+      ? "" : ` ${m.identify_score > 0 ? "+" : ""}${Number(m.identify_score).toFixed(1)} kg`;
+    return `<em class="badge ${m.identify_method || "unassigned"}" title="${title}">${label}${score}</em>`;
   }
 
   function renderMeasurementTable() {
@@ -360,6 +368,17 @@
     renderComposition(last);
   }
 
+  function fillUserFilter(users, autoselect = false) {
+    const sel = $("#userSelect");
+    const previous = state.user;
+    sel.innerHTML = "";
+    sel.add(new Option("wszyscy", "all"));
+    users.forEach((u) => sel.add(new Option(`${u.display_name} (${u.measurements})`, u.username)));
+    const wanted = autoselect && users.length === 1 ? users[0].username : previous;
+    sel.value = [...sel.options].some((o) => o.value === wanted) ? wanted : "all";
+    state.user = sel.value;
+  }
+
   async function boot() {
     const [health, users, predictions] = await Promise.all([
       getJSON("/api/health"), getJSON("/api/users"), getJSON("/api/predictions"),
@@ -371,10 +390,7 @@
         ? `${health.garmin_days} dni${health.garmin_last_day ? ` (do ${health.garmin_last_day})` : ""}`
         : "niepołączony"}`;
 
-    const sel = $("#userSelect");
-    sel.add(new Option("wszyscy", "all"));
-    users.users.forEach((u) => sel.add(new Option(`${u.display_name} (${u.measurements})`, u.username)));
-    if (users.users.length === 1) { sel.value = users.users[0].username; state.user = sel.value; }
+    fillUserFilter(users.users, users.users.length === 1);
 
     $("#forecastMessage").textContent = predictions.message;
     $("#forecastPlanned").innerHTML = (predictions.planned || [])
@@ -389,6 +405,252 @@
   $("#rangeSelect").addEventListener("change", (e) => { state.days = +e.target.value; refresh(); });
   $("#sportSelect").addEventListener("change", (e) => { state.sport = e.target.value; refresh(); });
 
+  // ---------------------------------------------------------------- panel
+  const admin = { settings: [], values: {}, enabled: true, users: [],
+                  measurements: [], total: 0, offset: 0, filter: "all", pageSize: 100 };
+
+  async function sendJSON(url, method, body) {
+    const resp = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.detail || `${method} ${url} -> ${resp.status}`);
+    return data;
+  }
+
+  function say(el, text, kind = "") {
+    const node = $(el);
+    node.textContent = text;
+    node.className = `form-msg ${kind}`;
+    if (text) setTimeout(() => { if (node.textContent === text) node.textContent = ""; }, 6000);
+  }
+
+  function renderSettings() {
+    const groups = [...new Set(admin.settings.map((s) => s.group))];
+    $("#settingsForm").innerHTML = groups.map((group) => `
+      <div class="settings-group">
+        <h3>${group}</h3>
+        <div class="settings-group-fields">
+          ${admin.settings.filter((s) => s.group === group).map((s) => `
+            <label class="field" data-key="${s.key}">
+              <span>${s.label}${s.unit ? ` [${s.unit.trim()}]` : ""}</span>
+              <input type="number" id="set-${s.key}" value="${admin.values[s.key]}"
+                     min="${s.min}" max="${s.max}"
+                     step="${s.kind === "int" ? 1 : 0.01}" ${admin.enabled ? "" : "disabled"}>
+              ${s.help ? `<span class="setting-help">${s.help}</span>` : ""}
+            </label>`).join("")}
+        </div>
+      </div>`).join("");
+  }
+
+  function renderUsers() {
+    const rows = admin.users.map((u) => `
+      <tr>
+        <td>${u.username}</td>
+        <td>${u.display_name}</td>
+        <td>${u.sex === "male" ? "M" : "K"}</td>
+        <td>${num(u.height_cm, 0)} cm</td>
+        <td>${u.birthdate}</td>
+        <td>${num(u.ref_weight, 1)}</td>
+        <td>${u.garmin_profile_id ? "tak" : "—"}</td>
+        <td>${u.measurements}</td>
+        <td>${u.last_measured_at ? `${dateTimeLabel(u.last_measured_at)} · ${num(u.last_weight, 1)} kg` : "—"}</td>
+        <td class="actions">
+          <button class="btn small" data-edit-user="${u.username}" ${admin.enabled ? "" : "disabled"}>Edytuj</button>
+          <button class="btn small danger" data-del-user="${u.username}" ${admin.enabled ? "" : "disabled"}>Usuń</button>
+        </td>
+      </tr>`).join("");
+    $("#usersTable tbody").innerHTML = rows ||
+      `<tr><td colspan="10" class="empty">Brak profili — dodaj pierwszy.</td></tr>`;
+  }
+
+  function userOptions(selected) {
+    const opts = admin.users.map((u) =>
+      `<option value="${u.username}" ${u.username === selected ? "selected" : ""}>${u.display_name}</option>`);
+    return `<option value="" ${selected ? "" : "selected"}>— nieprzypisany —</option>${opts.join("")}`;
+  }
+
+  function renderAdminMeasurements() {
+    const rows = admin.measurements.map((m) => `
+      <tr class="${m.username ? "" : "row-dim"}">
+        <td>${m.id}</td>
+        <td>${dateTimeLabel(m.measured_at)}</td>
+        <td>${m.recorded_at ? dateTimeLabel(m.recorded_at.replace(" ", "T") + "Z") : "—"}</td>
+        <td>${num(m.weight_kg, 2)} kg</td>
+        <td>${m.impedance ?? "—"}</td>
+        <td>${m.fat_percentage ? `${num(m.fat_percentage)} %` : "—"}</td>
+        <td>${identBadgeOnly(m)}</td>
+        <td><select data-assign="${m.id}" ${admin.enabled ? "" : "disabled"}>${userOptions(m.username)}</select></td>
+        <td class="actions">
+          <button class="btn small danger" data-del-meas="${m.id}" ${admin.enabled ? "" : "disabled"}>Usuń</button>
+        </td>
+      </tr>`).join("");
+    $("#adminMeasTable tbody").innerHTML = rows ||
+      `<tr><td colspan="9" class="empty">Brak pomiarów.</td></tr>`;
+    $("#adminMeasCount").textContent =
+      `${admin.measurements.length} z ${admin.total}`;
+    $("#adminMeasMore").disabled = admin.measurements.length >= admin.total;
+  }
+
+  async function loadAdminMeasurements(reset = true) {
+    if (reset) { admin.offset = 0; admin.measurements = []; }
+    const q = admin.filter === "unassigned"
+      ? `unassigned=true` : `user=${encodeURIComponent(state.user)}`;
+    const data = await getJSON(
+      `/api/measurements/all?${q}&limit=${admin.pageSize}&offset=${admin.offset}`);
+    admin.measurements = admin.measurements.concat(data.measurements);
+    admin.total = data.total;
+    admin.offset += data.measurements.length;
+    renderAdminMeasurements();
+  }
+
+  async function loadAdmin() {
+    const [cfg, users] = await Promise.all([
+      getJSON("/api/settings"), getJSON("/api/admin/users"),
+    ]);
+    admin.settings = cfg.settings;
+    admin.values = cfg.values;
+    admin.enabled = cfg.admin_enabled;
+    admin.users = users.users;
+    $("#adminWarn").hidden = admin.enabled;
+    ["userAddBtn", "settingsSaveBtn", "settingsResetBtn"].forEach((id) => {
+      $(`#${id}`).disabled = !admin.enabled;
+    });
+    renderSettings();
+    renderUsers();
+    await loadAdminMeasurements();
+  }
+
+  // --- formularz profilu ---
+  function showUserForm(user) {
+    const form = $("#userForm");
+    form.hidden = false;
+    $("#userFormMode").value = user ? "edit" : "add";
+    $("#fUsername").value = user ? user.username : "";
+    $("#fUsername").disabled = Boolean(user);       // login jest kluczem, nie zmieniamy
+    $("#fDisplay").value = user ? user.display_name : "";
+    $("#fSex").value = user ? user.sex : "male";
+    $("#fHeight").value = user ? user.height_cm : "";
+    $("#fBirth").value = user ? user.birthdate : "";
+    $("#fWeight").value = user && user.ref_weight != null ? user.ref_weight : "";
+    $("#fGarmin").value = user && user.garmin_profile_id ? user.garmin_profile_id : "";
+    $("#fDisplay").focus();
+  }
+
+  $("#userAddBtn").addEventListener("click", () => showUserForm(null));
+  $("#userCancelBtn").addEventListener("click", () => { $("#userForm").hidden = true; });
+
+  $("#userForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const payload = {
+      username: $("#fUsername").value.trim(),
+      display_name: $("#fDisplay").value.trim(),
+      sex: $("#fSex").value,
+      height_cm: Number($("#fHeight").value),
+      birthdate: $("#fBirth").value,
+      ref_weight: $("#fWeight").value === "" ? null : Number($("#fWeight").value),
+      garmin_profile_id: $("#fGarmin").value.trim() || null,
+    };
+    try {
+      if ($("#userFormMode").value === "add") {
+        await sendJSON("/api/users", "POST", payload);
+      } else {
+        const { username, ...rest } = payload;
+        await sendJSON(`/api/users/${encodeURIComponent(username)}`, "PATCH", rest);
+      }
+      $("#userForm").hidden = true;
+      await loadAdmin();
+      fillUserFilter(admin.users);                   // odśwież filtr profili u góry
+      await refresh();
+      say("#settingsMsg", "Zapisano profil.", "ok");
+    } catch (err) {
+      say("#settingsMsg", err.message, "err");
+    }
+  });
+
+  $("#usersTable").addEventListener("click", async (e) => {
+    const edit = e.target.dataset.editUser;
+    const del = e.target.dataset.delUser;
+    if (edit) return showUserForm(admin.users.find((u) => u.username === edit));
+    if (!del) return;
+    const user = admin.users.find((u) => u.username === del);
+    if (!confirm(`Usunąć profil ${user.display_name}?\n\n` +
+                 `${user.measurements} pomiarów zostanie w bazie jako nieprzypisane.`)) return;
+    try {
+      await sendJSON(`/api/users/${encodeURIComponent(del)}`, "DELETE");
+      await loadAdmin();
+      fillUserFilter(admin.users);
+      await refresh();
+      say("#settingsMsg", `Usunięto profil ${user.display_name}.`, "ok");
+    } catch (err) { say("#settingsMsg", err.message, "err"); }
+  });
+
+  // --- ustawienia ---
+  $("#settingsSaveBtn").addEventListener("click", async (e) => {
+    e.preventDefault();
+    const changes = {};
+    admin.settings.forEach((s) => {
+      const value = Number($(`#set-${s.key}`).value);
+      if (!Number.isNaN(value) && value !== Number(admin.values[s.key])) changes[s.key] = value;
+    });
+    if (!Object.keys(changes).length) return say("#settingsMsg", "Nic się nie zmieniło.");
+    try {
+      const data = await sendJSON("/api/settings", "PUT", changes);
+      admin.values = data.values;
+      renderSettings();
+      say("#settingsMsg",
+          `Zapisano: ${data.saved.join(", ")}. Usługi podłapią zmianę przy kolejnym cyklu.`, "ok");
+    } catch (err) { say("#settingsMsg", err.message, "err"); }
+  });
+
+  $("#settingsResetBtn").addEventListener("click", async (e) => {
+    e.preventDefault();
+    if (!confirm("Przywrócić wszystkie ustawienia z pliku .env?")) return;
+    try {
+      const data = await sendJSON("/api/settings/reset", "POST", { key: null });
+      admin.values = data.values;
+      renderSettings();
+      say("#settingsMsg", "Przywrócono wartości z .env.", "ok");
+    } catch (err) { say("#settingsMsg", err.message, "err"); }
+  });
+
+  // --- pomiary ---
+  $("#adminMeasFilter").addEventListener("change", (e) => {
+    admin.filter = e.target.value;
+    loadAdminMeasurements();
+  });
+  $("#adminMeasMore").addEventListener("click", () => loadAdminMeasurements(false));
+
+  $("#adminMeasTable").addEventListener("change", async (e) => {
+    const id = e.target.dataset.assign;
+    if (!id) return;
+    try {
+      const data = await sendJSON(`/api/measurements/${id}`, "PATCH",
+                                  { username: e.target.value || null });
+      say("#adminMeasMsg",
+          `Pomiar #${id} → ${data.user || "nieprzypisany"} (skład ciała przeliczony).`, "ok");
+      await loadAdminMeasurements();
+      await refresh();
+    } catch (err) {
+      say("#adminMeasMsg", err.message, "err");
+      await loadAdminMeasurements();
+    }
+  });
+
+  $("#adminMeasTable").addEventListener("click", async (e) => {
+    const id = e.target.dataset.delMeas;
+    if (!id) return;
+    if (!confirm(`Usunąć pomiar #${id}? Tej operacji nie da się cofnąć.`)) return;
+    try {
+      await sendJSON(`/api/measurements/${id}`, "DELETE");
+      say("#adminMeasMsg", `Usunięto pomiar #${id}.`, "ok");
+      await loadAdminMeasurements();
+      await refresh();
+    } catch (err) { say("#adminMeasMsg", err.message, "err"); }
+  });
+
   function showTab(name) {
     const tab = document.querySelector(`.tab[data-tab="${name}"]`);
     if (!tab) return;
@@ -397,6 +659,7 @@
     tab.classList.add("active");
     $(`#tab-${name}`).classList.add("active");
     Object.values(charts).forEach((c) => c.resize());
+    if (name === "admin") loadAdmin().catch((err) => say("#settingsMsg", err.message, "err"));
   }
 
   document.querySelectorAll(".tab").forEach((tab) => {

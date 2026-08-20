@@ -164,3 +164,37 @@ class BodyMetrics:
             metabolic_age=self.metabolic_age(),
             ideal_weight=self.ideal_weight(),
         )
+
+
+# --------------------------------------------------------------------------
+# Uzycie z pomiarem z bazy
+# --------------------------------------------------------------------------
+COMPOSITION_COLUMNS = ("bmi", "fat_percentage", "water_percentage", "muscle_mass",
+                       "bone_mass", "visceral_fat", "protein_percentage", "lbm",
+                       "bmr", "metabolic_age", "ideal_weight")
+
+
+def composition_for(user_row, weight_kg: float, impedance, when) -> dict:
+    """Sklad ciala dla pomiaru konkretnej osoby.
+
+    Zwraca same None-e, gdy nie da sie policzyc (brak profilu, brak impedancji,
+    waga albo wzrost poza zakresem wzorow) - dzieki temu przypisanie pomiaru do
+    innej osoby zawsze nadpisuje komplet kolumn, zamiast zostawiac liczby
+    policzone dla poprzedniego profilu.
+    """
+    from app.db import age_of              # tutaj, zeby uniknac cyklu importow
+
+    empty = dict.fromkeys(COMPOSITION_COLUMNS)
+    if user_row is None or not impedance:
+        return empty
+    try:
+        metrics = BodyMetrics(
+            weight=weight_kg,
+            height=user_row["height_cm"],
+            age=age_of(user_row, when.date() if hasattr(when, "date") else when),
+            sex=user_row["sex"],
+            impedance=impedance,
+        ).compute()
+    except (ValueError, KeyError, TypeError):
+        return empty
+    return {**empty, **metrics.as_dict()}

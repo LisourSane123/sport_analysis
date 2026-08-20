@@ -20,6 +20,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+# Wagi bez sparowania z aplikacja producenta maja nieustawiony zegar i podaja
+# rok 1970 albo 2000. Takiej daty nie wolno zapisac jako czas pomiaru.
+MIN_PLAUSIBLE_YEAR = 2015
+
 BODY_COMPOSITION_UUID = "0000181b-0000-1000-8000-00805f9b34fb"
 WEIGHT_SCALE_UUID = "0000181d-0000-1000-8000-00805f9b34fb"  # Mi Scale 1 (tylko waga)
 FRAME_LENGTH = 13
@@ -34,13 +38,19 @@ class ScaleMeasurement:
     stabilized: bool
     has_impedance: bool
     weight_removed: bool
-    measured_at: datetime | None
+    measured_at: datetime | None      # czas z wagi, ale tylko gdy wiarygodny
+    scale_clock: datetime | None      # to, co waga naprawde podala (do diagnozy)
     raw_hex: str
 
     @property
     def is_complete(self) -> bool:
         """Pomiar nadaje sie do zapisu z pelna kompozycja ciala."""
         return self.stabilized and self.has_impedance and bool(self.impedance)
+
+    @property
+    def clock_ok(self) -> bool:
+        """Czy waga ma ustawiony zegar."""
+        return self.measured_at is not None
 
 
 def _unit_of(ctrl0: int) -> tuple[str, float]:
@@ -76,12 +86,17 @@ def decode(data: bytes) -> ScaleMeasurement | None:
     weight = raw_weight / divisor
 
     try:
-        measured_at = datetime(
+        scale_clock = datetime(
             int.from_bytes(data[2:4], "little"),
             data[4], data[5], data[6], data[7], data[8],
         )
-    except ValueError:
-        measured_at = None
+    except ValueError:                     # np. miesiac 0 albo 31 lutego
+        scale_clock = None
+
+    # Rok 1970/2000 oznacza zegar, ktorego nikt nie ustawil - wtedy czas
+    # pomiaru musi wziac na siebie wolajacy (patrz app/scale/runner.py).
+    measured_at = (scale_clock if scale_clock is not None
+                   and scale_clock.year >= MIN_PLAUSIBLE_YEAR else None)
 
     return ScaleMeasurement(
         weight=round(weight, 2),
@@ -92,5 +107,6 @@ def decode(data: bytes) -> ScaleMeasurement | None:
         has_impedance=has_impedance,
         weight_removed=weight_removed,
         measured_at=measured_at,
+        scale_clock=scale_clock,
         raw_hex=data.hex(),
     )

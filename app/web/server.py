@@ -8,12 +8,15 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import config
-from app.db import connect, init_db
+from app import config, settings
+from app.db import (add_user, connect, delete_measurement, delete_user,
+                    get_measurement, get_user, get_user_by_id, init_db,
+                    update_measurement, update_user)
+from app.scale.body_metrics import composition_for
 
 BASE = Path(__file__).resolve().parent
 app = FastAPI(title="Waga_RP", docs_url="/api/docs", redoc_url=None)
@@ -214,6 +217,169 @@ def api_predictions():
         "planned": ["regresja liniowa trendu wagi", "ARIMA / Prophet",
                     "wplyw objetosci treningu na trend"],
     })
+
+
+# ---------------------------------------------------------------- panel admina
+def _admin_guard() -> None:
+    if not config.ADMIN_ENABLED:
+        raise HTTPException(status_code=403,
+                            detail="Panel administracyjny wylaczony (ADMIN_ENABLED=0 w .env)")
+
+
+def _require_user(conn, username: str):
+    user = get_user(conn, username)
+    if user is None:
+        raise HTTPException(status_code=404, detail=f"Nie ma profilu '{username}'")
+    return user
+
+
+@app.get("/api/settings")
+def api_settings():
+    """Opis ustawien + aktualne wartosci (baza -> .env -> domyslne)."""
+    with connect() as conn:
+        values = settings.all_values(conn)
+        stored = {r["key"] for r in conn.execute("SELECT key FROM settings")}
+    return {"settings": settings.describe(), "values": values,
+            "overridden": sorted(stored), "admin_enabled": config.ADMIN_ENABLED}
+
+
+@app.put("/api/settings")
+def api_settings_save(changes: dict = Body(...)):
+    _admin_guard()
+    with connect() as conn:
+        try:
+            settings.save(conn, changes)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"values": settings.all_values(conn), "saved": sorted(changes)}
+
+
+@app.post("/api/settings/reset")
+def api_settings_reset(key: str | None = Body(None, embed=True)):
+    """Kasuje wartosc z bazy - wraca ta z .env."""
+    _admin_guard()
+    with connect() as conn:
+        if key is not None and key not in settings.BY_KEY:
+            raise HTTPException(status_code=400, detail=f"Nieznane ustawienie: {key}")
+        settings.reset(conn, key)
+        return {"values": settings.all_values(conn)}
+
+
+@app.get("/api/admin/users")
+def api_admin_users():
+    """Profile z licznikami - do tabeli w panelu."""
+    with connect() as conn:
+        rows = rows_to_dicts(conn.execute(
+            """SELECT u.*, COUNT(m.id) AS measurements,
+                      MAX(m.measured_at) AS last_measured_at,
+                      (SELECT weight_kg FROM measurements
+                       WHERE user_id = u.id ORDER BY measured_at DESC LIMIT 1) AS last_weight
+               FROM users u LEFT JOIN measurements m ON m.user_id = u.id
+               GROUP BY u.id ORDER BY u.display_name""").fetchall())
+    return {"users": rows}
+
+
+@app.post("/api/users")
+def api_user_create(payload: dict = Body(...)):
+    _admin_guard()
+    required = ("username", "display_name", "height_cm", "birthdate", "sex")
+    missing = [f for f in required if not payload.get(f)]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Brakuje pol: {', '.join(missing)}")
+    if payload["sex"] not in ("male", "female"):
+        raise HTTPException(status_code=400, detail="Plec musi byc 'male' albo 'female'")
+    with connect() as conn:
+        if get_user(conn, payload["username"]) is not None:
+            raise HTTPException(status_code=409,
+                                detail=f"Login '{payload['username']}' jest juz zajety")
+        try:
+            uid = add_user(conn, payload["username"], payload["display_name"],
+                           payload["height_cm"], payload["birthdate"], payload["sex"],
+                           payload.get("ref_weight"), payload.get("garmin_profile_id"))
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"id": uid, "username": payload["username"]}
+
+
+@app.patch("/api/users/{username}")
+def api_user_update(username: str, payload: dict = Body(...)):
+    _admin_guard()
+    with connect() as conn:
+        _require_user(conn, username)
+        if payload.get("sex") not in (None, "male", "female"):
+            raise HTTPException(status_code=400, detail="Plec musi byc 'male' albo 'female'")
+        changed = update_user(conn, username, payload)
+        return {"updated": changed}
+
+
+@app.delete("/api/users/{username}")
+def api_user_delete(username: str):
+    """Usuwa profil. Pomiary zostaja w bazie jako nieprzypisane."""
+    _admin_guard()
+    with connect() as conn:
+        _require_user(conn, username)
+        return {"deleted": delete_user(conn, username)}
+
+
+@app.get("/api/measurements/all")
+def api_measurements_all(user: str | None = None, unassigned: bool = False,
+                         limit: int = Query(200, le=2000), offset: int = 0):
+    """Wszystkie pomiary z wagi - bez okna czasowego, ze stronicowaniem."""
+    with connect() as conn:
+        where, args = "WHERE 1=1", []
+        if unassigned:
+            where += " AND m.user_id IS NULL"
+        elif user and user != "all":
+            uid = _user_id(conn, user)
+            where += " AND m.user_id = ?"
+            args.append(uid)
+        total = conn.execute(
+            f"SELECT COUNT(*) c FROM measurements m {where}", args).fetchone()["c"]
+        rows = rows_to_dicts(conn.execute(
+            f"""SELECT m.*, u.display_name AS user_display, u.username
+                FROM measurements m LEFT JOIN users u ON u.id = m.user_id
+                {where} ORDER BY m.measured_at DESC LIMIT ? OFFSET ?""",
+            [*args, limit, offset]).fetchall())
+    return {"measurements": rows, "total": total, "limit": limit, "offset": offset}
+
+
+@app.patch("/api/measurements/{measurement_id}")
+def api_measurement_update(measurement_id: int, payload: dict = Body(...)):
+    """Zmiana przypisania pomiaru. Sklad ciala jest przeliczany dla nowej osoby."""
+    _admin_guard()
+    with connect() as conn:
+        row = get_measurement(conn, measurement_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"Nie ma pomiaru #{measurement_id}")
+
+        username = payload.get("username")
+        if username in (None, "", "none", "null"):
+            user, user_id = None, None
+        else:
+            user = _require_user(conn, username)
+            user_id = user["id"]
+
+        when = datetime.fromisoformat(row["measured_at"])
+        changes = {"user_id": user_id, "identify_method": "manual",
+                   "identify_score": None}
+        changes.update(composition_for(user, row["weight_kg"], row["impedance"], when))
+        try:
+            update_measurement(conn, measurement_id, changes)
+        except Exception as exc:                # kolizja z UNIQUE(user_id, measured_at)
+            raise HTTPException(
+                status_code=409,
+                detail=f"Ten profil ma juz pomiar z {row['measured_at']} ({exc})")
+        return {"id": measurement_id, "user_id": user_id,
+                "user": user["display_name"] if user else None}
+
+
+@app.delete("/api/measurements/{measurement_id}")
+def api_measurement_delete(measurement_id: int):
+    _admin_guard()
+    with connect() as conn:
+        if get_measurement(conn, measurement_id) is None:
+            raise HTTPException(status_code=404, detail=f"Nie ma pomiaru #{measurement_id}")
+        return {"deleted": delete_measurement(conn, measurement_id)}
 
 
 @app.get("/api/health")
