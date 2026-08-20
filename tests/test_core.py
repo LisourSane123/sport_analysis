@@ -714,3 +714,11 @@ class TestReadOnlyConnection(unittest.TestCase):
         with self.assertRaises(sqlite3.OperationalError):
             reader.execute("DELETE FROM measurements")
         reader.close()
+
+    def test_missing_file_explains_what_to_do(self):
+        """W trybie ro SQLite mowi tylko 'unable to open database file'."""
+        with self.assertRaises(FileNotFoundError) as ctx:
+            connect_readonly("/nie/ma/takiej/bazy.db")
+        message = str(ctx.exception)
+        self.assertIn("/nie/ma/takiej/bazy.db", message)
+        self.assertIn("fetch_db.sh", message)

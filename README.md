@@ -211,13 +211,27 @@ conn = sqlite3.connect("file:/home/pi/Waga_RP/data/waga.db?mode=ro", uri=True)
 ```
 
 Ze skryptu spoza katalogu projektu: `PYTHONPATH=/home/pi/Waga_RP python3 model.py`.
-Na inną maszynę kopiuj przez `.backup` (spójny plik nawet przy działających usługach),
-nie przez `cp` i nie przez sshfs:
+
+**Baza nie jest w repozytorium** (`data/*.db` jest w `.gitignore`), więc świeży klon jej
+nie zawiera. Na maszynę, na której liczysz model, pobierz ją tak:
 
 ```bash
-sqlite3 data/waga.db ".backup /tmp/waga-snapshot.db"
-scp pi@raspberrypi:/tmp/waga-snapshot.db .
+bash tools/fetch_db.sh pi@raspberrypi
 ```
+
+Skrypt robi na Pi migawkę przez `.backup` i dopiero ją kopiuje. Zwykłe `cp`, `scp` czy
+sshfs na działającej bazie są ryzykowne: w trybie WAL część danych siedzi w pliku `-wal`,
+którego nie skopiujesz atomowo razem z bazą.
+
+Najczęstszy błąd przy pierwszym uruchomieniu modelu:
+
+```
+sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) unable to open database file
+```
+
+W trybie `mode=ro` SQLite nigdy nie zakłada pliku, więc ten komunikat zawsze znaczy
+„nie ma takiej ścieżki" — sprawdź, czy plik istnieje i czy ścieżka jest bezwzględna.
+`connect_readonly()` sprawdza to sam i mówi wprost, czego brakuje.
 
 ## Dashboard
 

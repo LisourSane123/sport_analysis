@@ -155,6 +155,15 @@ def connect_readonly(db_path: Path | str | None = None) -> sqlite3.Connection:
     proba zapisu konczy sie bledem, zamiast po cichu zmienic pomiary.
     """
     path = Path(db_path if db_path is not None else DB_PATH)
+    if not path.exists():
+        # W trybie ro SQLite nie zaklada pliku i zglasza tylko "unable to open
+        # database file" - bez podania sciezki, ktorej szukal.
+        raise FileNotFoundError(
+            f"Nie ma bazy: {path}\n"
+            f"Baza nie jest w repozytorium (data/*.db jest w .gitignore), wiec po "
+            f"sklonowaniu projektu trzeba ja skopiowac z Raspberry Pi:\n"
+            f"  bash tools/fetch_db.sh pi@raspberrypi\n"
+            f"albo wskazac inna sciezke przez DB_PATH w .env")
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     return conn
