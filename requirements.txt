@@ -2,6 +2,5 @@
 bleak>=0.22.0          # BLE (BlueZ/D-Bus) - skanowanie reklam wagi
 fastapi>=0.111.0       # API + dashboard
 uvicorn[standard]>=0.30.0
-httpx>=0.27.0          # klient HTTP do Strava API
 python-dotenv>=1.0.0   # konfiguracja z .env
 garminconnect>=0.3.11  # nieoficjalny klient Garmin Connect

@@ -22,7 +22,6 @@ CREATE TABLE IF NOT EXISTS users (
     sex           TEXT    NOT NULL CHECK (sex IN ('male','female')),
     ref_weight    REAL,                       -- waga podana przy zakladaniu profilu
                                               -- (punkt startowy, zanim beda pomiary)
-    strava_athlete_id INTEGER,
     garmin_profile_id TEXT,                     -- displayName konta Garmin Connect
     created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
 );
@@ -53,34 +52,6 @@ CREATE TABLE IF NOT EXISTS measurements (
 );
 
 CREATE INDEX IF NOT EXISTS idx_meas_user_time ON measurements (user_id, measured_at);
-
-CREATE TABLE IF NOT EXISTS activities (
-    id                  INTEGER PRIMARY KEY,   -- id aktywnosci ze Stravy
-    athlete_id          INTEGER,
-    user_id             INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    name                TEXT,
-    sport_type          TEXT,
-    start_date          TEXT,                  -- UTC ISO8601
-    start_date_local    TEXT,
-    timezone            TEXT,
-    distance_m          REAL,
-    moving_time_s       INTEGER,
-    elapsed_time_s      INTEGER,
-    total_elevation_gain REAL,
-    average_speed       REAL,                  -- m/s
-    max_speed           REAL,
-    average_heartrate   REAL,
-    max_heartrate       REAL,
-    average_cadence     REAL,
-    calories            REAL,
-    suffer_score        REAL,
-    kudos_count         INTEGER,
-    map_polyline        TEXT,
-    raw_json            TEXT,
-    synced_at           TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_act_start ON activities (start_date_local);
 
 CREATE TABLE IF NOT EXISTS garmin_activities (
     id                  INTEGER PRIMARY KEY,   -- activityId z Garmin Connect
@@ -153,14 +124,6 @@ CREATE TABLE IF NOT EXISTS garmin_daily (
 
 CREATE INDEX IF NOT EXISTS idx_gdaily_day ON garmin_daily (day);
 
-CREATE TABLE IF NOT EXISTS strava_tokens (
-    athlete_id    INTEGER PRIMARY KEY,
-    access_token  TEXT NOT NULL,
-    refresh_token TEXT NOT NULL,
-    expires_at    INTEGER NOT NULL,           -- unix epoch
-    scope         TEXT,
-    updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
-);
 """
 
 
@@ -201,13 +164,13 @@ def _migrate(conn) -> None:
 # Uzytkownicy
 # --------------------------------------------------------------------------
 def add_user(conn, username, display_name, height_cm, birthdate, sex,
-             ref_weight=None, strava_athlete_id=None) -> int:
+             ref_weight=None, garmin_profile_id=None) -> int:
     cur = conn.execute(
         """INSERT INTO users (username, display_name, height_cm, birthdate, sex,
-                              ref_weight, strava_athlete_id)
+                              ref_weight, garmin_profile_id)
            VALUES (?,?,?,?,?,?,?)""",
         (username, display_name, float(height_cm), birthdate, sex,
-         float(ref_weight) if ref_weight is not None else None, strava_athlete_id),
+         float(ref_weight) if ref_weight is not None else None, garmin_profile_id),
     )
     conn.commit()
     return cur.lastrowid
@@ -261,67 +224,6 @@ def last_measurement(conn, user_id: int | None = None):
     return conn.execute(
         "SELECT * FROM measurements WHERE user_id = ? ORDER BY measured_at DESC LIMIT 1",
         (user_id,)).fetchone()
-
-
-# --------------------------------------------------------------------------
-# Aktywnosci (Strava)
-# --------------------------------------------------------------------------
-ACTIVITY_COLUMNS = (
-    "id", "athlete_id", "user_id", "name", "sport_type", "start_date",
-    "start_date_local", "timezone", "distance_m", "moving_time_s",
-    "elapsed_time_s", "total_elevation_gain", "average_speed", "max_speed",
-    "average_heartrate", "max_heartrate", "average_cadence", "calories",
-    "suffer_score", "kudos_count", "map_polyline", "raw_json",
-)
-
-
-def upsert_activity(conn, act: dict[str, Any], user_id: int | None = None) -> bool:
-    """Zapisuje/aktualizuje aktywnosc. True gdy byla nowa."""
-    row = {
-        "id": act["id"],
-        "athlete_id": (act.get("athlete") or {}).get("id"),
-        "user_id": user_id,
-        "name": act.get("name"),
-        "sport_type": act.get("sport_type") or act.get("type"),
-        "start_date": act.get("start_date"),
-        "start_date_local": act.get("start_date_local"),
-        "timezone": act.get("timezone"),
-        "distance_m": act.get("distance"),
-        "moving_time_s": act.get("moving_time"),
-        "elapsed_time_s": act.get("elapsed_time"),
-        "total_elevation_gain": act.get("total_elevation_gain"),
-        "average_speed": act.get("average_speed"),
-        "max_speed": act.get("max_speed"),
-        "average_heartrate": act.get("average_heartrate"),
-        "max_heartrate": act.get("max_heartrate"),
-        "average_cadence": act.get("average_cadence"),
-        "calories": act.get("calories") or act.get("kilojoules"),
-        "suffer_score": act.get("suffer_score"),
-        "kudos_count": act.get("kudos_count"),
-        "map_polyline": (act.get("map") or {}).get("summary_polyline"),
-        "raw_json": json.dumps(act, ensure_ascii=False),
-    }
-    existed = conn.execute("SELECT 1 FROM activities WHERE id = ?", (row["id"],)).fetchone()
-    updates = ",".join(f"{c}=excluded.{c}" for c in ACTIVITY_COLUMNS if c != "id")
-    conn.execute(
-        f"INSERT INTO activities ({','.join(ACTIVITY_COLUMNS)}) "
-        f"VALUES ({','.join('?' * len(ACTIVITY_COLUMNS))}) "
-        f"ON CONFLICT(id) DO UPDATE SET {updates}, synced_at = datetime('now')",
-        [row[c] for c in ACTIVITY_COLUMNS],
-    )
-    conn.commit()
-    return existed is None
-
-
-def latest_activity_epoch(conn, athlete_id: int | None = None) -> int:
-    """Unix epoch najswiezszej zapisanej aktywnosci (0 gdy brak) - dla parametru `after`."""
-    sql = "SELECT MAX(strftime('%s', REPLACE(REPLACE(start_date,'T',' '),'Z',''))) FROM activities"
-    args: Iterable = ()
-    if athlete_id is not None:
-        sql += " WHERE athlete_id = ?"
-        args = (athlete_id,)
-    val = conn.execute(sql, args).fetchone()[0]
-    return int(val) if val else 0
 
 
 # --------------------------------------------------------------------------
@@ -402,32 +304,6 @@ def user_id_for_garmin(conn, profile_id: str | None) -> int | None:
     row = conn.execute("SELECT id FROM users WHERE garmin_profile_id = ?",
                        (profile_id,)).fetchone()
     return row["id"] if row else None
-
-
-# --------------------------------------------------------------------------
-# Tokeny Strava
-# --------------------------------------------------------------------------
-def save_tokens(conn, athlete_id, access_token, refresh_token, expires_at, scope=None):
-    conn.execute(
-        """INSERT INTO strava_tokens (athlete_id, access_token, refresh_token, expires_at, scope)
-           VALUES (?,?,?,?,?)
-           ON CONFLICT(athlete_id) DO UPDATE SET
-             access_token=excluded.access_token,
-             refresh_token=excluded.refresh_token,
-             expires_at=excluded.expires_at,
-             scope=COALESCE(excluded.scope, strava_tokens.scope),
-             updated_at=datetime('now')""",
-        (athlete_id, access_token, refresh_token, int(expires_at), scope),
-    )
-    conn.commit()
-
-
-def get_tokens(conn, athlete_id: int | None = None):
-    if athlete_id is None:
-        return conn.execute(
-            "SELECT * FROM strava_tokens ORDER BY updated_at DESC LIMIT 1").fetchone()
-    return conn.execute(
-        "SELECT * FROM strava_tokens WHERE athlete_id = ?", (athlete_id,)).fetchone()
 
 
 if __name__ == "__main__":

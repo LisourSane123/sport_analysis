@@ -36,6 +36,13 @@ def _since(days: int | None) -> str | None:
     return (datetime.now() - timedelta(days=days)).isoformat(timespec="seconds")
 
 
+def _garmin_cutoff(since: str | None) -> str | None:
+    """Garmin trzyma czas ze spacja (2026-08-20 17:56:42), reszta bazy w ISO z 'T'.
+    Porownanie tekstowe musi byc w tym samym formacie, inaczej granica okna
+    obcina caly ostatni dzien (spacja < 'T')."""
+    return since.replace("T", " ") if since else None
+
+
 def _user_id(conn, username: str | None) -> int | None:
     if not username or username == "all":
         return None
@@ -55,7 +62,7 @@ def api_users():
     with connect() as conn:
         users = rows_to_dicts(conn.execute(
             """SELECT u.username, u.display_name, u.height_cm, u.sex,
-                      u.strava_athlete_id, COUNT(m.id) AS measurements
+                      u.garmin_profile_id, COUNT(m.id) AS measurements
                FROM users u LEFT JOIN measurements m ON m.user_id = u.id
                GROUP BY u.id ORDER BY u.display_name""").fetchall())
         orphans = conn.execute(
@@ -85,26 +92,60 @@ def api_measurements(user: str | None = None, days: int = 180,
 
 @app.get("/api/activities")
 def api_activities(days: int = 180, sport: str | None = None,
-                   limit: int = Query(500, le=5000)):
-    since = _since(days)
+                   user: str | None = None, limit: int = Query(500, le=5000)):
+    """Treningi z Garmina. Nazwy pol sa spojne z reszta API (start_date_local)."""
+    since = _garmin_cutoff(_since(days))
     with connect() as conn:
-        sql = "SELECT * FROM activities WHERE 1=1"
+        uid = _user_id(conn, user)
+        sql = ("""SELECT id, user_id, name, sport_type,
+                         REPLACE(start_time_local, ' ', 'T') AS start_date_local,
+                         REPLACE(start_time_gmt, ' ', 'T')   AS start_date,
+                         distance_m, moving_time_s, elapsed_time_s,
+                         total_elevation_gain, average_speed, max_speed,
+                         average_heartrate, max_heartrate, average_cadence,
+                         average_power, calories, aerobic_te, anaerobic_te,
+                         vo2max, device
+                  FROM garmin_activities WHERE 1=1""")
         args: list[Any] = []
+        if uid is not None:
+            sql += " AND user_id = ?"
+            args.append(uid)
         if since:
-            sql += " AND start_date_local >= ?"
+            sql += " AND start_time_local >= ?"
             args.append(since)
         if sport and sport != "all":
             sql += " AND sport_type = ?"
             args.append(sport)
-        sql += " ORDER BY start_date_local DESC LIMIT ?"
+        sql += " ORDER BY start_time_local DESC LIMIT ?"
         args.append(limit)
         activities = rows_to_dicts(conn.execute(sql, args).fetchall())
         sports = [r["sport_type"] for r in conn.execute(
-            "SELECT DISTINCT sport_type FROM activities WHERE sport_type IS NOT NULL "
-            "ORDER BY sport_type").fetchall()]
-    for a in activities:
-        a.pop("raw_json", None)
+            "SELECT DISTINCT sport_type FROM garmin_activities "
+            "WHERE sport_type IS NOT NULL ORDER BY sport_type").fetchall()]
     return {"activities": activities, "sports": sports}
+
+
+@app.get("/api/garmin/daily")
+def api_garmin_daily(user: str | None = None, days: int = 90,
+                     limit: int = Query(400, le=2000)):
+    """Dzienne dane z Garmina: sen, HRV, tetno spoczynkowe, stres, gotowosc."""
+    since = _since(days)
+    with connect() as conn:
+        uid = _user_id(conn, user)
+        sql = "SELECT * FROM garmin_daily WHERE 1=1"
+        args: list[Any] = []
+        if uid is not None:
+            sql += " AND user_id = ?"
+            args.append(uid)
+        if since:
+            sql += " AND day >= ?"
+            args.append(since[:10])
+        sql += " ORDER BY day DESC LIMIT ?"
+        args.append(limit)
+        days_rows = rows_to_dicts(conn.execute(sql, args).fetchall())
+    for d in days_rows:
+        d.pop("raw_json", None)
+    return {"days": days_rows}
 
 
 @app.get("/api/summary")
@@ -128,16 +169,19 @@ def api_summary(user: str | None = None, days: int = 30):
             [since or "0", *args]).fetchone()
 
         act_where, act_args = ("AND user_id = ?", [uid]) if uid is not None else ("", [])
+        act_since = _garmin_cutoff(since) or "0"
         act = conn.execute(
             f"""SELECT COUNT(*) n, COALESCE(SUM(distance_m),0) dist,
                        COALESCE(SUM(moving_time_s),0) time,
                        COALESCE(SUM(total_elevation_gain),0) elev,
                        AVG(average_heartrate) hr
-                FROM activities WHERE start_date_local >= ? {act_where}""",
-            [since or "0", *act_args]).fetchone()
+                FROM garmin_activities
+                WHERE start_time_local >= ? {act_where}""",
+            [act_since, *act_args]).fetchone()
         last_activity = conn.execute(
-            f"SELECT * FROM activities WHERE 1=1 {act_where} "
-            f"ORDER BY start_date_local DESC LIMIT 1", act_args).fetchone()
+            f"SELECT *, REPLACE(start_time_local, ' ', 'T') AS start_date_local "
+            f"FROM garmin_activities WHERE 1=1 {act_where} "
+            f"ORDER BY start_time_local DESC LIMIT 1", act_args).fetchone()
 
     latest_d = dict(latest) if latest else None
     delta = None
@@ -176,14 +220,11 @@ def api_predictions():
 def api_health():
     with connect() as conn:
         m = conn.execute("SELECT COUNT(*) c FROM measurements").fetchone()["c"]
-        a = conn.execute("SELECT COUNT(*) c FROM activities").fetchone()["c"]
         u = conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
-        tok = conn.execute("SELECT COUNT(*) c FROM strava_tokens").fetchone()["c"]
-        ga = conn.execute("SELECT COUNT(*) c FROM garmin_activities").fetchone()["c"]
+        a = conn.execute("SELECT COUNT(*) c FROM garmin_activities").fetchone()["c"]
         gd = conn.execute("SELECT MAX(day) d, COUNT(*) c FROM garmin_daily").fetchone()
     return {"status": "ok", "db": str(config.DB_PATH), "users": u,
-            "measurements": m, "activities": a, "strava_connected": bool(tok),
-            "garmin_activities": ga, "garmin_days": gd["c"],
+            "measurements": m, "activities": a, "garmin_days": gd["c"],
             "garmin_last_day": gd["d"],
             "garmin_connected": Path(config.GARMIN_TOKENSTORE).exists()}
 

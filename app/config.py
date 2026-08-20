@@ -44,12 +44,6 @@ DB_PATH = Path(_db) if Path(_db).is_absolute() else PROJECT_ROOT / _db
 WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT = _int("WEB_PORT", 11230)
 
-# --- strava ---
-STRAVA_CLIENT_ID = (os.getenv("STRAVA_CLIENT_ID") or "").strip()
-STRAVA_CLIENT_SECRET = (os.getenv("STRAVA_CLIENT_SECRET") or "").strip()
-STRAVA_SYNC_INTERVAL = _int("STRAVA_SYNC_INTERVAL", 1800)
-
-
 # --- garmin (nieoficjalne API Garmin Connect przez biblioteke garminconnect) ---
 GARMIN_EMAIL = (os.getenv("GARMIN_EMAIL") or "").strip()
 GARMIN_PASSWORD = os.getenv("GARMIN_PASSWORD") or ""

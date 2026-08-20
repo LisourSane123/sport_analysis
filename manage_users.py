@@ -5,7 +5,6 @@
     python3 manage_users.py add ruka "Lukasz" 182 1995-04-12 male 84      # bez pytan
     python3 manage_users.py list
     python3 manage_users.py edit ruka --height 183 --max 97
-    python3 manage_users.py link ruka 12345678
     python3 manage_users.py link-garmin ruka
     python3 manage_users.py delete ruka
 
@@ -131,24 +130,16 @@ def cmd_add(conn, a) -> None:
                                    hint="t/n").lower() not in ("t", "tak", "y"):
                 raise SystemExit("Anulowano.")
 
-    strava_id = a.strava_id
-    if interactive and strava_id is None:
-        answer = ask("Strava athlete_id", default="-", hint="Enter = pominac, mozna dodac pozniej")
-        strava_id = int(answer) if answer.isdigit() else None
-
-    uid = add_user(conn, username, display_name, height, birthdate, sex,
-                   ref_weight, strava_id)
+    uid = add_user(conn, username, display_name, height, birthdate, sex, ref_weight)
     print(f"\nDodano profil #{uid}: {display_name} ({username}), {sex}, {height:.0f} cm, "
           f"ur. {birthdate}"
-          + (f", waga startowa {ref_weight:.1f} kg" if ref_weight else "")
-          + (f", Strava {strava_id}" if strava_id else ""))
+          + (f", waga startowa {ref_weight:.1f} kg" if ref_weight else ""))
     if ref_weight is None:
         print("Bez wagi startowej pierwszy pomiar moze zostac nieprzypisany "
               "(uzupelnisz: manage_users.py edit "
               f"{username} --weight <kg>)")
-    if strava_id is None:
-        print("Konto Strava dopiszesz pozniej: python3 manage_users.py link "
-              f"{username} <athlete_id>")
+    print("Konto Garmina powiazesz: python3 manage_users.py link-garmin "
+          f"{username}")
 
 
 def cmd_list(conn, _a) -> None:
@@ -158,7 +149,7 @@ def cmd_list(conn, _a) -> None:
         return
     now = datetime.now()
     print(f"{'id':<4}{'username':<12}{'imie':<16}{'wzrost':<8}{'wiek':<6}{'plec':<8}"
-          f"{'ost. waga':<15}{'przedzial (7 dni)':<22}{'strava':<12}garmin")
+          f"{'ost. waga':<15}{'przedzial (7 dni)':<22}garmin")
     for r in rows:
         reference, source = _reference_weight(conn, r)
         samples = [(datetime.fromisoformat(m["measured_at"]), m["weight_kg"])
@@ -175,8 +166,7 @@ def cmd_list(conn, _a) -> None:
         last = f"{reference:.1f} ({source})" if reference is not None else "-"
         print(f"{r['id']:<4}{r['username']:<12}{r['display_name'][:15]:<16}"
               f"{r['height_cm']:<8.0f}{age_of(r):<6}{r['sex']:<8}{last:<15}{span:<22}"
-              f"{str(r['strava_athlete_id'] or '-'):<12}"
-              f"{(r['garmin_profile_id'] or '-')[:20]}")
+              f"{(r['garmin_profile_id'] or '-')[:24]}")
 
 
 def cmd_edit(conn, a) -> None:
@@ -192,18 +182,6 @@ def cmd_edit(conn, a) -> None:
                  [*changes.values(), a.username])
     conn.commit()
     print(f"Zaktualizowano {a.username}: {', '.join(changes)}")
-
-
-def cmd_link(conn, a) -> None:
-    if get_user(conn, a.username) is None:
-        raise SystemExit(f"Nie ma profilu '{a.username}'")
-    conn.execute("UPDATE users SET strava_athlete_id=? WHERE username=?",
-                 (a.athlete_id, a.username))
-    conn.execute("UPDATE activities SET user_id=(SELECT id FROM users WHERE username=?) "
-                 "WHERE athlete_id=?", (a.username, a.athlete_id))
-    conn.commit()
-    print(f"Powiazano {a.username} z athlete_id={a.athlete_id} "
-          "(istniejace aktywnosci tez przypisane)")
 
 
 def cmd_link_garmin(conn, a) -> None:
@@ -246,7 +224,6 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("sex", nargs="?", type=_parse_sex, help="male/female (lub M/K)")
     a.add_argument("ref_weight", nargs="?", type=_parse_weight,
                    help="obecna waga [kg] - punkt startowy rozpoznawania")
-    a.add_argument("--strava-id", type=int, dest="strava_id")
     a.set_defaults(func=cmd_add)
 
     l = sub.add_parser("list", help="pokaz profile")
@@ -261,11 +238,6 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--weight", type=_parse_weight, dest="ref_weight",
                    help="waga startowa [kg]")
     e.set_defaults(func=cmd_edit)
-
-    k = sub.add_parser("link", help="powiaz profil z kontem Strava")
-    k.add_argument("username")
-    k.add_argument("athlete_id", type=int)
-    k.set_defaults(func=cmd_link)
 
     g = sub.add_parser("link-garmin", help="powiaz profil z kontem Garmin Connect")
     g.add_argument("username")

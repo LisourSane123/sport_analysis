@@ -1,26 +1,37 @@
 # Waga_RP
 
 Zbieranie pomiarów z inteligentnej wagi **Xiaomi Mi Body Composition Scale 2** (BLE),
-dekodowanie ich, zapis do **SQLite**, import biegów ze **Stravy**, dane treningowe
-i zdrowotne z **Garmin Connect** oraz nowoczesny dashboard webowy.
+dekodowanie ich, zapis do **SQLite**, import treningów oraz danych zdrowotnych
+z **Garmin Connect** i nowoczesny dashboard webowy.
 Docelowa platforma: **Raspberry Pi 5** (Raspberry Pi OS).
 
 ```
-[ waga BLE ] --bleak--> [ dekoder ] --> [ SQLite ] <-- [ Strava API ]
-                                            |     \
-                                            |      \-- [ Garmin Connect ]
+[ waga BLE ] --bleak--> [ dekoder ] --> [ SQLite ] <-- [ Garmin Connect ]
+                                            |
                                      [ FastAPI + dashboard ]
 ```
+
+**Spis treści:** [Instalacja](#instalacja-raspberry-pi-5) · [Pierwsze uruchomienie](#pierwsze-uruchomienie) ·
+[Garmin Connect](#garmin-connect) · [Usługi](#usługi-systemd) · [Baza](#baza-danych-sqlite) ·
+[Dashboard i API](#dashboard) · [Rozpoznawanie użytkownika](#rozpoznawanie-użytkownika) ·
+[Problemy](#rozwiązywanie-problemów)
+
+## Wymagania
+
+* Raspberry Pi 5 (albo dowolny Linux z Bluetooth LE) — Raspberry Pi OS / Debian
+* Python 3.11+
+* Waga Xiaomi Mi Body Composition Scale 2 (`MIBFS`)
+* Konto Garmin Connect — opcjonalnie, tylko dla danych treningowych
 
 ## Instalacja (Raspberry Pi 5)
 
 ```bash
-git clone <repo> Waga_RP && cd Waga_RP
+git clone https://github.com/<uzytkownik>/Waga_RP.git && cd Waga_RP
 bash install.sh                 # pakiety, venv, baza, uprawnienia BLE, usługi systemd
 cp .env.example .env            # (install.sh robi to sam, jeśli pliku nie ma)
 ```
 
-Konfiguracja w `.env`: MAC wagi, ścieżka bazy, port dashboardu, klucze Strava.
+Konfiguracja w `.env`: MAC wagi, ścieżka bazy, port dashboardu, ustawienia Garmina.
 
 ## Pierwsze uruchomienie
 
@@ -44,26 +55,6 @@ python3 -m app.scale.runner
 python3 -m app.web.server        # http://<ip-rpi>:11230
 ```
 
-## Strava
-
-1. Załóż aplikację na <https://www.strava.com/settings/api>.
-   W polu **Authorization Callback Domain** wpisz `localhost`.
-2. `STRAVA_CLIENT_ID` i `STRAVA_CLIENT_SECRET` przepisz do `.env`.
-3. Autoryzacja (jednorazowo — potem token odświeża się sam):
-
-```bash
-python3 -m app.strava.auth        # otworzy adres do wklejenia w przeglądarkę
-python3 manage_users.py link ruka <athlete_id>   # powiąż konto Strava z profilem
-python3 -m app.strava.sync --all  # pierwszy import całej historii
-python3 -m app.strava.sync        # kolejne: tylko nowsze niż ostatnia w bazie
-```
-
-Autoryzację można zrobić z dowolnego komputera w sieci; jeśli wolisz skopiować kod
-ręcznie z adresu przekierowania: `python3 -m app.strava.auth --code <kod>`.
-
-Sync w tle: `python3 -m app.strava.sync --loop` (co `STRAVA_SYNC_INTERVAL` sekund,
-domyślnie 30 min) — jako usługa `waga-strava`.
-
 ## Garmin Connect
 
 Garmin nie udostępnia publicznego API zwykłemu użytkownikowi (oficjalne jest tylko dla
@@ -78,11 +69,10 @@ python3 -m app.garmin.sync --days 30        # pierwszy import
 python3 -m app.garmin.sync                  # kolejne: przyrostowo
 ```
 
-Hasło nie jest nigdzie zapisywane. Do `GARMIN_TOKENSTORE` (domyślnie
-`data/garmin_tokens/`) trafiają tylko tokeny OAuth — ważne około roku i odświeżane
-w tle — dzięki czemu usługa działa bez danych logowania w `.env`.
-Gdy Garmin odrzuci tokeny (zmiana hasła, wylogowanie wszystkich sesji), wystarczy
-powtórzyć `python3 -m app.garmin.auth`.
+Hasło nie jest nigdzie zapisywane. Do `GARMIN_TOKENSTORE` (domyślnie `data/garmin_tokens/`)
+trafiają tylko tokeny OAuth — ważne około roku i odświeżane w tle — dzięki czemu usługa
+działa bez danych logowania w `.env`. Gdy Garmin odrzuci tokeny (zmiana hasła, wylogowanie
+wszystkich sesji), wystarczy powtórzyć `python3 -m app.garmin.auth`.
 
 Co jest pobierane:
 
@@ -99,9 +89,9 @@ Między zapytaniami jest przerwa `GARMIN_REQUEST_PAUSE` — Garmin bywa wrażliw
 bez oddechu. Sync w tle: `python3 -m app.garmin.sync --loop` (usługa `waga-garmin`,
 co `GARMIN_SYNC_INTERVAL` sekund, domyślnie godzina).
 
-Ponieważ to nieoficjalne API, Garmin może w każdej chwili zmienić nazwy pól. Dlatego
-każda kolumna ma listę kandydatów w `app/garmin/mapping.py`, a pełna odpowiedź trafia
-do `raw_json` — nawet po zmianie nazwy dane nie przepadają, wystarczy dopisać nowy klucz
+Ponieważ to nieoficjalne API, Garmin może w każdej chwili zmienić nazwy pól. Dlatego każda
+kolumna ma listę kandydatów w `app/garmin/mapping.py`, a pełna odpowiedź trafia do
+`raw_json` — nawet po zmianie nazwy dane nie przepadają, wystarczy dopisać nowy klucz
 i puścić sync ponownie.
 
 ## Usługi systemd
@@ -109,13 +99,12 @@ i puścić sync ponownie.
 | Usługa | Co robi |
 |---|---|
 | `waga-scale` | pętla BLE: pomiary → SQLite |
-| `waga-strava` | cykliczny import aktywności ze Stravy |
 | `waga-garmin` | cykliczny import aktywności i danych dziennych z Garmin Connect |
 | `waga-dashboard` | serwer WWW na porcie z `WEB_PORT` (domyślnie 11230) |
 
 ```bash
 sudo systemctl start  waga-scale waga-dashboard
-sudo systemctl enable --now waga-strava waga-garmin
+sudo systemctl enable --now waga-garmin
 journalctl -u waga-scale -f
 ```
 
@@ -123,12 +112,10 @@ journalctl -u waga-scale -f
 
 | Tabela | Zawartość |
 |---|---|
-| `users` | profile: wzrost, data urodzenia, płeć, waga startowa (`ref_weight`), `strava_athlete_id`, `garmin_profile_id` |
+| `users` | profile: wzrost, data urodzenia, płeć, waga startowa (`ref_weight`), `garmin_profile_id` |
 | `measurements` | pomiary z wagi + wyliczona kompozycja ciała (klucz `user_id + measured_at` chroni przed duplikatami) |
-| `activities` | aktywności ze Stravy (dystans, czas, przewyższenie, tętno, kadencja, polilinia, pełny JSON) |
 | `garmin_activities` | treningi z Garmina (klucz: `activityId`) — dystans, tętno, moc, training effect, pełny JSON |
 | `garmin_daily` | jeden wiersz na dobę (klucz: `profile_id + day`) — kroki, kalorie, tętno spoczynkowe, stres, body battery, sen, HRV, gotowość, VO2max |
-| `strava_tokens` | access/refresh token, czas wygaśnięcia |
 
 Kolumny pomiaru: `weight_kg`, `impedance`, `bmi`, `fat_percentage`, `water_percentage`,
 `muscle_mass`, `bone_mass`, `visceral_fat`, `protein_percentage`, `lbm`, `bmr`,
@@ -153,10 +140,11 @@ Chart.js jest w repo (`app/web/static/vendor/`) — dashboard działa bez intern
 
 | Endpoint | Opis |
 |---|---|
-| `GET /api/health` | stan bazy, połączenia ze Stravą i Garminem (liczba dni/aktywności) |
+| `GET /api/health` | stan bazy i połączenia z Garminem (liczba dni i treningów) |
 | `GET /api/users` | profile + liczba pomiarów |
 | `GET /api/measurements?user=&days=` | pomiary |
-| `GET /api/activities?days=&sport=` | aktywności |
+| `GET /api/activities?days=&sport=&user=` | treningi z Garmina |
+| `GET /api/garmin/daily?user=&days=` | dzienne dane: sen, HRV, tętno spoczynkowe, stres, gotowość |
 | `GET /api/summary?user=&days=` | KPI dla kafelków |
 | `GET /api/predictions` | **placeholder** modułu predykcji (`available: false`) |
 | `GET /api/docs` | interaktywna dokumentacja OpenAPI |
@@ -205,6 +193,57 @@ a zakładka „Predykcje" ma opisaną ramkę na wykres. Wystarczy dodać moduł
 `app/predict/` liczący prognozę i podmienić odpowiedź endpointu — frontend
 odczyta `message` i `planned` bez zmian w HTML.
 
+## Migracja ze starej wersji (ze Stravą)
+
+Strava od 1 czerwca 2026 wymaga płatnej subskrypcji do korzystania z API, więc integracja
+została usunięta — wszystkie dane o bieganiu pochodzą teraz z Garmina, który i tak był ich
+źródłem (zegarek → Garmin Connect → Strava). Bazy założone wcześniejszą wersją nadal mają
+tabele `activities` i `strava_tokens`; nic nie psują, ale można je usunąć:
+
+```bash
+sqlite3 data/waga.db ".backup data/waga-kopia.db"   # najpierw kopia!
+python3 tools/drop_strava.py                        # pokaże, co usuwa, i zapyta
+```
+
+## Prywatność i bezpieczeństwo repozytorium
+
+Do repozytorium **nie trafiają**: `.env` (MAC wagi, ustawienia), `data/*.db` (pomiary),
+`data/garmin_tokens/` (tokeny konta Garmina) — blokuje je `.gitignore`. W repo jest tylko
+`.env.example` z pustymi wartościami.
+
+Po sklonowaniu warto włączyć strażnika, który zatrzyma commit z sekretem:
+
+```bash
+git config core.hooksPath .githooks     # blokuje .env, bazy i tokeny w commicie
+chmod 600 .env                          # plik czytelny tylko dla właściciela
+```
+
+Sprawdzenie przed pierwszym pushem:
+
+```bash
+git status --short                                       # nie może być tu .env ani *.db
+git check-ignore -v .env data/waga.db data/garmin_tokens # każdy plik musi mieć regułę
+```
+
+Hasło do Garmina nie jest przechowywane nigdzie — `python3 -m app.garmin.auth` zapisuje
+wyłącznie tokeny OAuth. Panel WWW nie ma logowania: trzymaj go w sieci domowej albo
+za VPN-em (WireGuard, Tailscale), nie na przekierowanym porcie routera.
+
+## Struktura projektu
+
+```
+app/
+  config.py          ustawienia z .env
+  db.py              schemat SQLite, migracje, zapisy
+  scale/             BLE: skan, dekoder ramek, skład ciała, rozpoznawanie osoby
+  garmin/            Garmin Connect: logowanie, mapowanie pól, sync
+  web/               FastAPI + dashboard (HTML, JS, Chart.js lokalnie)
+manage_users.py      kreator profili i powiązań z Garminem
+tools/               narzędzia jednorazowe (np. czyszczenie po Stravie)
+systemd/             pliki usług: waga-scale, waga-garmin, waga-dashboard
+tests/               testy bez sprzętu
+```
+
 ## Testy
 
 ```bash
@@ -221,6 +260,13 @@ odczyta `message` i `planned` bez zmian w HTML.
 * **Pomiar trafił do złego profilu** — sprawdź zakładkę Historia (kolumna *Profil* pokazuje
   metodę i zapas w kg). Przy dwóch osobach o podobnej wadze zmniejsz `IDENT_CONFIDENCE`
   do 0.9 (węższe przedziały) albo skróć `IDENT_WINDOW_DAYS`.
-* **Strava 429** — limit 200 zapytań / 15 min. Sync przyrostowy pobiera tylko nowości;
-  `--details` (kalorie) kosztuje 1 zapytanie na aktywność.
-# sport_analysis
+* **Garmin odrzuca logowanie** — najczęściej po zmianie hasła albo wylogowaniu wszystkich
+  sesji: `python3 -m app.garmin.auth --logout`, potem `python3 -m app.garmin.auth`.
+* **Garmin odpowiada 429** — za dużo zapytań pod rząd. Zwiększ `GARMIN_REQUEST_PAUSE`,
+  używaj `--quick` przy dużych backfillach i nie odpalaj syncu częściej niż co godzinę.
+* **Pusta kolumna w `garmin_daily`** — Garmin przemianował pole albo zegarek go nie mierzy.
+  Zajrzyj w `raw_json` z tego dnia i dopisz nazwę do `app/garmin/mapping.py`.
+
+## Licencja
+
+Projekt prywatny, do własnego użytku. Dane pomiarowe i tokeny nie trafiają do repozytorium.

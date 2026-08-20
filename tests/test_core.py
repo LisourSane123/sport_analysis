@@ -7,16 +7,15 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta
 
-from app.db import (add_user, connect, init_db, insert_measurement,
-                    latest_activity_epoch, upsert_activity)
-from app.scale.body_metrics import BodyMetrics
-from app.scale.decoder import decode
-from app.scale.identify import build_candidate, identify, t_cdf, t_ppf
 from app import config
-from app.db import (latest_garmin_activity_day, upsert_garmin_activity,
+from app.db import (add_user, connect, init_db, insert_measurement,
+                    latest_garmin_activity_day, upsert_garmin_activity,
                     upsert_garmin_daily)
 from app.garmin import sync as garmin_sync
 from app.garmin.mapping import activity_row, daily_row, has_data
+from app.scale.body_metrics import BodyMetrics
+from app.scale.decoder import decode
+from app.scale.identify import build_candidate, identify, t_cdf, t_ppf
 
 
 def frame(ctrl0=0x02, ctrl1=0x22, impedance=512, raw_weight=17670):
@@ -78,18 +77,6 @@ class TestStorage(unittest.TestCase):
         row = {"user_id": 1, "measured_at": "2026-08-19T07:31:12", "weight_kg": 60.0}
         self.assertIsNotNone(insert_measurement(self.conn, row))
         self.assertIsNone(insert_measurement(self.conn, row))
-
-    def test_activity_upsert_and_epoch(self):
-        act = {"id": 1, "athlete": {"id": 7}, "name": "Bieg", "sport_type": "Run",
-               "start_date": "2026-08-19T05:00:00Z",
-               "start_date_local": "2026-08-19T07:00:00", "distance": 10000,
-               "moving_time": 3000}
-        self.assertTrue(upsert_activity(self.conn, act))
-        act["name"] = "Bieg poranny"
-        self.assertFalse(upsert_activity(self.conn, act))
-        self.assertEqual(self.conn.execute(
-            "SELECT name FROM activities WHERE id=1").fetchone()["name"], "Bieg poranny")
-        self.assertGreater(latest_activity_epoch(self.conn, 7), 0)
 
 
 if __name__ == "__main__":

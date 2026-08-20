@@ -366,8 +366,10 @@
     ]);
 
     $("#healthLine").textContent =
-      `${health.measurements} pomiarów · ${health.activities} aktywności · ` +
-      `Strava: ${health.strava_connected ? "połączona" : "niepołączona"}`;
+      `${health.measurements} pomiarów · ${health.activities} treningów · ` +
+      `Garmin: ${health.garmin_connected
+        ? `${health.garmin_days} dni${health.garmin_last_day ? ` (do ${health.garmin_last_day})` : ""}`
+        : "niepołączony"}`;
 
     const sel = $("#userSelect");
     sel.add(new Option("wszyscy", "all"));
