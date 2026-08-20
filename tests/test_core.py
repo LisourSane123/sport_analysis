@@ -3,6 +3,7 @@
 Uruchomienie: .venv/bin/python -m unittest discover -s tests
 """
 import os
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -13,7 +14,7 @@ from app import __version__ as app_version
 from app import config, settings
 from app import db as db_module
 from app.web import server
-from app.db import (add_user, connect, delete_duplicates,
+from app.db import (add_user, connect, connect_readonly, delete_duplicates,
                     find_duplicate_groups, init_db, insert_measurement,
                     latest_garmin_activity_day, repair_broken_timestamps,
                     upsert_garmin_activity, upsert_garmin_daily)
@@ -681,3 +682,35 @@ class TestDuplicateCleanup(unittest.TestCase):
         self.assertEqual(len(groups[0]["remove"]), 2)
         self.assertEqual(groups[0]["first"], "2026-08-20T07:00:00")
         self.assertEqual(groups[0]["last"], "2026-08-20T07:06:00")
+
+
+class TestReadOnlyConnection(unittest.TestCase):
+    """Polaczenie dla modeli/analiz: czyta obok uslug, ale nie moze pisac."""
+
+    def setUp(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        self.path = tmp.name
+        init_db(self.path)
+        self.writer = connect(self.path)
+        add_user(self.writer, "ruka", "Lukasz", 182, "1995-04-12", "male", 84)
+        insert_measurement(self.writer, {"user_id": 1, "measured_at": "2026-08-20T07:00:00",
+                                         "weight_kg": 84.0})
+
+    def tearDown(self):
+        self.writer.close()
+        os.unlink(self.path)
+
+    def test_reads_while_service_writes(self):
+        reader = connect_readonly(self.path)
+        self.assertEqual(reader.execute("SELECT COUNT(*) FROM measurements").fetchone()[0], 1)
+        insert_measurement(self.writer, {"user_id": 1, "measured_at": "2026-08-20T19:00:00",
+                                         "weight_kg": 83.7})
+        self.assertEqual(reader.execute("SELECT COUNT(*) FROM measurements").fetchone()[0], 2)
+        reader.close()
+
+    def test_writes_are_refused(self):
+        reader = connect_readonly(self.path)
+        with self.assertRaises(sqlite3.OperationalError):
+            reader.execute("DELETE FROM measurements")
+        reader.close()

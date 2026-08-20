@@ -147,6 +147,19 @@ def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
     return conn
 
 
+def connect_readonly(db_path: Path | str | None = None) -> sqlite3.Connection:
+    """Polaczenie tylko do odczytu - do analiz i modeli, obok dzialajacych uslug.
+
+    Baza chodzi w trybie WAL, wiec czytanie nie blokuje zapisu ani odwrotnie.
+    Tryb `mode=ro` jest zabezpieczeniem przed przypadkowym `UPDATE` w notatniku:
+    proba zapisu konczy sie bledem, zamiast po cichu zmienic pomiary.
+    """
+    path = Path(db_path if db_path is not None else DB_PATH)
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 def init_db(db_path: Path | str | None = None) -> None:
     with connect(db_path) as conn:
         conn.executescript(SCHEMA)

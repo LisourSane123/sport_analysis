@@ -33,6 +33,11 @@ cp .env.example .env            # (install.sh robi to sam, jeśli pliku nie ma)
 
 Konfiguracja w `.env`: MAC wagi, ścieżka bazy, port dashboardu, ustawienia Garmina.
 
+`DB_PATH` przyjmuje ścieżkę względną (liczoną od katalogu projektu) albo bezwzględną,
+np. `DB_PATH=/mnt/dysk/waga.db`. Symlink w miejscu `data/waga.db` też działa — SQLite
+podąża za nim, a pliki `-wal` i `-shm` powstają obok pliku docelowego. Po zmianie
+`DB_PATH` zrestartuj usługi.
+
 ## Pierwsze uruchomienie
 
 ```bash
@@ -189,6 +194,30 @@ Tokeny Garmina leżą poza bazą, w pliku `data/garmin_tokens/garmin_tokens.json
 (uprawnienia 0600) — pamiętaj o nim przy kopii zapasowej albo świadomie go pomiń.
 
 Podgląd danych: `sqlite3 data/waga.db "SELECT measured_at, weight_kg, fat_percentage FROM measurements ORDER BY 1 DESC LIMIT 10"`
+
+### Dostęp do bazy z własnych skryptów
+
+Baza chodzi w trybie WAL, więc czytanie nie koliduje z działającymi usługami. Do analiz
+i modeli używaj połączenia tylko do odczytu — zapis skończy się wtedy błędem zamiast
+po cichu zmienić pomiary:
+
+```python
+from app.db import connect_readonly          # skrypt w katalogu projektu
+conn = connect_readonly()                     # ścieżka z DB_PATH
+
+# albo bez importowania projektu, z dowolnego miejsca:
+import sqlite3
+conn = sqlite3.connect("file:/home/pi/Waga_RP/data/waga.db?mode=ro", uri=True)
+```
+
+Ze skryptu spoza katalogu projektu: `PYTHONPATH=/home/pi/Waga_RP python3 model.py`.
+Na inną maszynę kopiuj przez `.backup` (spójny plik nawet przy działających usługach),
+nie przez `cp` i nie przez sshfs:
+
+```bash
+sqlite3 data/waga.db ".backup /tmp/waga-snapshot.db"
+scp pi@raspberrypi:/tmp/waga-snapshot.db .
+```
 
 ## Dashboard
 
