@@ -94,6 +94,22 @@ kolumna ma listę kandydatów w `app/garmin/mapping.py`, a pełna odpowiedź tra
 `raw_json` — nawet po zmianie nazwy dane nie przepadają, wystarczy dopisać nowy klucz
 i puścić sync ponownie.
 
+## Aktualizacja
+
+```bash
+bash tools/update.sh        # kopia bazy, git pull, zależności, migracja, restart usług
+```
+
+**Sam `git pull` nie wystarczy.** Pliki HTML i JavaScript są czytane z dysku przy każdym
+żądaniu, ale kod Pythona siedzi w pamięci działających procesów aż do restartu — dashboard
+pokaże wtedy nowy panel, który rozmawia ze starym API (puste karty, brakujące endpointy).
+Dashboard sam to wykrywa: porównuje wersję z `/api/health` z wersją wpisaną w `index.html`
+i wyświetla pasek z komendą do wykonania. Ręcznie:
+
+```bash
+sudo systemctl restart waga-scale waga-garmin waga-dashboard
+```
+
 ## Panel administracyjny
 
 Zakładka **Panel** w dashboardzie robi z przeglądarki to, co wcześniej wymagało SSH:
@@ -271,7 +287,7 @@ app/
   web/               FastAPI + dashboard (HTML, JS, Chart.js lokalnie)
 manage_users.py      kreator profili i powiązań z Garminem
   settings.py        ustawienia zmienialne z panelu (baza -> .env -> domyślne)
-tools/               narzędzia jednorazowe (naprawa dat, czyszczenie po Stravie)
+tools/               update.sh oraz narzędzia jednorazowe (naprawa dat, sprzątanie po Stravie)
 systemd/             pliki usług: waga-scale, waga-garmin, waga-dashboard
 tests/               testy bez sprzętu
 ```
@@ -290,8 +306,14 @@ tests/               testy bez sprzętu
 * **Pomiar bez składu ciała** — waga nie zmierzyła impedancji (bose stopy!) albo pomiaru
   nie udało się przypisać do profilu; zapisuje się wtedy sam `weight_kg`.
 * **Data pomiaru z 1970 roku** — waga ma nieustawiony zegar (ustawia go dopiero aplikacja
-  producenta przy synchronizacji). Od tej wersji taki czas jest odrzucany i pomiar dostaje
-  czas Raspberry Pi; wcześniejsze wpisy naprawisz przez `python3 tools/fix_timestamps.py`.
+  producenta przy synchronizacji). Taki czas jest odrzucany i pomiar dostaje czas Raspberry Pi,
+  a wcześniejsze wpisy naprawiają się **automatycznie przy starcie usługi** (wersja 0.5.0+).
+  Podgląd zmian przed ich wprowadzeniem: `python3 tools/fix_timestamps.py`.
+* **Puste wykresy mimo pomiarów w bazie** — najczęściej właśnie skutek dat z 1970 roku:
+  pomiary wypadają poza wybrane okno czasowe. Zrestartuj usługi (naprawa dat) albo ustaw
+  zakres „wszystko" w filtrze u góry.
+* **Panel pokazuje puste karty** — usługa działa na starszej wersji kodu niż pliki na dysku.
+  `bash tools/update.sh` albo `sudo systemctl restart waga-dashboard`.
 * **Pomiar trafił do złego profilu** — sprawdź zakładkę Historia (kolumna *Profil* pokazuje
   metodę i zapas w kg). Przy dwóch osobach o podobnej wadze zmniejsz `IDENT_CONFIDENCE`
   do 0.9 (węższe przedziały) albo skróć `IDENT_WINDOW_DAYS`.

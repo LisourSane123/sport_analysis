@@ -5,16 +5,17 @@ Uruchomienie: .venv/bin/python -m unittest discover -s tests
 import os
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 
+from app import __version__ as app_version
 from app import config, settings
 from app import db as db_module
 from app.web import server
 from app.db import (add_user, connect, init_db, insert_measurement,
-                    latest_garmin_activity_day, upsert_garmin_activity,
-                    upsert_garmin_daily)
+                    latest_garmin_activity_day, repair_broken_timestamps,
+                    upsert_garmin_activity, upsert_garmin_daily)
 from app.garmin import sync as garmin_sync
 from app.garmin.mapping import activity_row, daily_row, has_data
 from app.scale.body_metrics import BodyMetrics
@@ -517,3 +518,68 @@ class TestAdminApi(unittest.TestCase):
             self.assertEqual(self.client.get("/api/settings").status_code, 200)  # odczyt dziala
         finally:
             server.config.ADMIN_ENABLED = True
+
+
+class TestTimestampRepair(unittest.TestCase):
+    """Naprawa dat zapisanych z nieustawionego zegara wagi (rok 1970)."""
+
+    def setUp(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        self.path = tmp.name
+        init_db(self.path)
+        self.conn = connect(self.path)
+        add_user(self.conn, "ruka", "Lukasz", 182, "1995-04-12", "male", 84)
+
+    def tearDown(self):
+        self.conn.close()
+        os.unlink(self.path)
+
+    def _broken(self, measured_at="1970-01-01T00:00:00", recorded_at="2026-08-18 05:31:10"):
+        self.conn.execute(
+            "INSERT INTO measurements (user_id, measured_at, recorded_at, weight_kg) "
+            "VALUES (?,?,?,?)", (1, measured_at, recorded_at, 84.2))
+        self.conn.commit()
+
+    def test_uses_recorded_at_converted_to_local_time(self):
+        self._broken()
+        fixed = repair_broken_timestamps(self.conn)
+        self.assertEqual(len(fixed), 1)
+        new_value = self.conn.execute("SELECT measured_at FROM measurements").fetchone()[0]
+        expected = (datetime(2026, 8, 18, 5, 31, 10, tzinfo=timezone.utc)
+                    .astimezone().replace(tzinfo=None).isoformat(timespec="seconds"))
+        self.assertEqual(new_value, expected)
+
+    def test_sane_dates_are_left_alone(self):
+        self.conn.execute(
+            "INSERT INTO measurements (user_id, measured_at, recorded_at, weight_kg) "
+            "VALUES (1,'2026-08-19T07:00:00','2026-08-19 05:00:00',83.0)")
+        self.conn.commit()
+        self.assertEqual(repair_broken_timestamps(self.conn), [])
+
+    def test_runs_automatically_on_init_and_is_idempotent(self):
+        self._broken()
+        init_db(self.path)                     # tak jak przy starcie uslugi
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM measurements WHERE measured_at < '2015'").fetchone()[0], 0)
+        init_db(self.path)                     # drugi start nic nie psuje
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM measurements").fetchone()[0], 1)
+
+
+class TestVersionExposed(unittest.TestCase):
+    """Dashboard porownuje wersje z /api/health z ta wpisana w index.html."""
+
+    def test_health_and_page_agree(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        orig = db_module.DB_PATH
+        db_module.DB_PATH = tmp.name
+        try:
+            init_db(tmp.name)
+            client = TestClient(server.app)
+            self.assertEqual(client.get("/api/health").json()["version"], app_version)
+            page = client.get("/").text
+            self.assertIn(f'name="app-version" content="{app_version}"', page)
+        finally:
+            db_module.DB_PATH = orig
+            os.unlink(tmp.name)

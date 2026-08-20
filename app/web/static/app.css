@@ -254,3 +254,18 @@ td.actions { white-space: nowrap; text-align: right; }
 td.actions .btn + .btn { margin-left: 6px; }
 td select { font-size: 12.5px; padding: 3px 6px; }
 .row-dim td { color: var(--muted); }
+
+/* ostrzezenie: przegladarka ma nowsze pliki niz uruchomiona usluga */
+.stale-warn {
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent-2) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-2) 40%, var(--border));
+  font-size: 13.5px;
+}
+.stale-warn code {
+  background: var(--surface-2);
+  padding: 1px 5px;
+  border-radius: 5px;
+}

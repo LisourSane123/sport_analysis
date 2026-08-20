@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 from app.config import DB_PATH
+
+log = logging.getLogger("db")
 
 SCHEMA = """
 PRAGMA journal_mode = WAL;
@@ -150,6 +153,38 @@ def init_db(db_path: Path | str | None = None) -> None:
         _migrate(conn)
 
 
+BROKEN_TIME_BEFORE = "2015-01-01"
+
+
+def repair_broken_timestamps(conn) -> list[tuple[int, str, str]]:
+    """Podmienia daty z nieustawionego zegara wagi (rok 1970/2000).
+
+    Za czas pomiaru bierzemy `recorded_at` - moment zapisu przez Raspberry Pi,
+    czyli sekundy po samym wazeniu. `recorded_at` jest w UTC, `measured_at`
+    w czasie lokalnym, wiec po drodze przeliczamy strefe.
+
+    Zwraca liste (id, stara data, nowa data). Kolumna `raw_hex` zostaje
+    nietknieta, wiec oryginalna ramka z wagi jest dalej w bazie.
+    """
+    rows = conn.execute(
+        "SELECT id, measured_at, recorded_at FROM measurements WHERE measured_at < ?",
+        (BROKEN_TIME_BEFORE,)).fetchall()
+    fixed = []
+    for row in rows:
+        try:
+            naive = datetime.fromisoformat(row["recorded_at"].replace("T", " "))
+            local = naive.replace(tzinfo=timezone.utc).astimezone()
+            new_value = local.replace(tzinfo=None).isoformat(timespec="seconds")
+            conn.execute("UPDATE measurements SET measured_at = ? WHERE id = ?",
+                         (new_value, row["id"]))
+        except (ValueError, AttributeError, sqlite3.IntegrityError):
+            continue                  # zepsany recorded_at albo kolizja z UNIQUE
+        fixed.append((row["id"], row["measured_at"], new_value))
+    if fixed:
+        conn.commit()
+    return fixed
+
+
 def _migrate(conn) -> None:
     """Dociaga schemat baz zalozonych wczesniejsza wersja."""
     user_cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
@@ -166,6 +201,12 @@ def _migrate(conn) -> None:
         if column.split()[0] not in meas_cols:
             conn.execute(f"ALTER TABLE measurements ADD COLUMN {column}")
     conn.commit()
+
+    fixed = repair_broken_timestamps(conn)
+    if fixed:
+        log.warning("Naprawiono date %d pomiarow zapisanych z nieustawionego zegara "
+                    "wagi (np. #%d: %s -> %s)", len(fixed), fixed[0][0],
+                    fixed[0][1], fixed[0][2])
 
 
 # --------------------------------------------------------------------------

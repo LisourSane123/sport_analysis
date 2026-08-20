@@ -12,7 +12,7 @@ from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import config, settings
+from app import __version__, config, settings
 from app.db import (add_user, connect, delete_measurement, delete_user,
                     get_measurement, get_user, get_user_by_id, init_db,
                     update_measurement, update_user)
@@ -389,7 +389,7 @@ def api_health():
         u = conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
         a = conn.execute("SELECT COUNT(*) c FROM garmin_activities").fetchone()["c"]
         gd = conn.execute("SELECT MAX(day) d, COUNT(*) c FROM garmin_daily").fetchone()
-    return {"status": "ok", "db": str(config.DB_PATH), "users": u,
+    return {"status": "ok", "version": __version__, "db": str(config.DB_PATH), "users": u,
             "measurements": m, "activities": a, "garmin_days": gd["c"],
             "garmin_last_day": gd["d"],
             "garmin_connected": Path(config.GARMIN_TOKENSTORE).exists()}

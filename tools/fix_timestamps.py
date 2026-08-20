@@ -4,35 +4,20 @@
     python3 tools/fix_timestamps.py            # pokazuje, co poprawi, i pyta
     python3 tools/fix_timestamps.py --yes      # bez pytania
 
-Za czas pomiaru bierzemy `recorded_at`, czyli moment zapisu przez Raspberry Pi -
-zapisujemy pomiar sekundy po jego zlapaniu, wiec roznica jest pomijalna.
-`recorded_at` jest w UTC (SQLite `datetime('now')`), a `measured_at` w czasie
-lokalnym, wiec po drodze przeliczamy strefe.
-
-Kolumna `raw_hex` zostaje nietknieta - oryginalna ramka z wagi, razem z jej
-bledna data, jest dalej w bazie.
+Od wersji 0.5.0 to samo dzieje sie automatycznie przy starcie kazdej uslugi
+(patrz app/db.py: repair_broken_timestamps), wiec ten skrypt przydaje sie
+glownie wtedy, gdy chcesz zobaczyc liste zmian przed ich wprowadzeniem.
 """
 from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.config import DB_PATH          # noqa: E402
-from app.db import connect              # noqa: E402
-
-BROKEN_BEFORE = "2015-01-01"
-
-
-def utc_to_local(value: str) -> str:
-    """'2026-08-20 12:34:56' (UTC) -> '2026-08-20T14:34:56' (czas lokalny)."""
-    naive = datetime.fromisoformat(value.replace("T", " "))
-    local = naive.replace(tzinfo=timezone.utc).astimezone()
-    return local.replace(tzinfo=None).isoformat(timespec="seconds")
-
+from app.config import DB_PATH                                    # noqa: E402
+from app.db import BROKEN_TIME_BEFORE, connect, repair_broken_timestamps  # noqa: E402
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Naprawa dat pomiarow")
@@ -45,20 +30,18 @@ def main() -> None:
 
     conn = connect(args.db)
     rows = conn.execute(
-        "SELECT id, measured_at, recorded_at, weight_kg, user_id FROM measurements "
-        "WHERE measured_at < ? ORDER BY id", (BROKEN_BEFORE,)).fetchall()
+        "SELECT id, measured_at, weight_kg FROM measurements WHERE measured_at < ? "
+        "ORDER BY id", (BROKEN_TIME_BEFORE,)).fetchall()
     if not rows:
         print("Nie ma pomiarow z bledna data - nic do roboty.")
         return
 
     print(f"Baza: {args.db}")
-    print(f"Pomiarow do poprawy: {len(rows)}\n")
-    print(f"{'id':<6}{'bylo':<22}{'bedzie':<22}{'waga':>8}")
-    plan = []
-    for r in rows:
-        nowy = utc_to_local(r["recorded_at"])
-        plan.append((r["id"], nowy))
-        print(f"{r['id']:<6}{r['measured_at']:<22}{nowy:<22}{r['weight_kg']:>8.2f}")
+    print(f"Pomiarow do poprawy: {len(rows)}")
+    for r in rows[:10]:
+        print(f"  #{r['id']:<5} {r['measured_at']:<22}{r['weight_kg']:>8.2f} kg")
+    if len(rows) > 10:
+        print(f"  ... i {len(rows) - 10} wiecej")
 
     if not args.yes:
         print(f'\nKopia zapasowa: sqlite3 {args.db} ".backup {args.db}.bak"')
@@ -66,17 +49,13 @@ def main() -> None:
             print("Anulowano - nic nie zmieniono.")
             return
 
-    poprawione = pominiete = 0
-    for mid, nowy in plan:
-        try:
-            conn.execute("UPDATE measurements SET measured_at = ? WHERE id = ?", (nowy, mid))
-            poprawione += 1
-        except Exception as exc:            # kolizja z UNIQUE(user_id, measured_at)
-            print(f"  #{mid}: pomijam ({exc})")
-            pominiete += 1
-    conn.commit()
+    fixed = repair_broken_timestamps(conn)
+    print(f"\nPoprawiono {len(fixed)} pomiarow.")
+    for mid, old, new in fixed[:10]:
+        print(f"  #{mid}: {old} -> {new}")
+    if len(rows) - len(fixed):
+        print(f"Pominieto {len(rows) - len(fixed)} (kolizja daty albo zepsuty recorded_at).")
     conn.close()
-    print(f"\nPoprawiono {poprawione} pomiarow" + (f", pominieto {pominiete}" if pominiete else "") + ".")
     print("Przypisanie do profili sprawdzisz w panelu (zakladka Panel -> Pomiary).")
 
 

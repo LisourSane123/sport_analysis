@@ -379,10 +379,26 @@
     state.user = sel.value;
   }
 
+  function checkVersion(health) {
+    // Pliki HTML/JS czyta sie z dysku przy kazdym zadaniu, ale kod Pythona
+    // siedzi w pamieci procesu az do restartu. Po `git pull` przegladarka
+    // dostaje wiec nowy panel i stare API - i to wyglada jak zepsuty panel.
+    const page = document.querySelector('meta[name="app-version"]')?.content;
+    if (!page || page === health.version) return;
+    const warn = $("#staleWarn");
+    warn.innerHTML =
+      `Usługa działa na starszej wersji kodu niż pliki na dysku ` +
+      `(serwer: <b>${health.version || "sprzed 0.5.0"}</b>, pliki: <b>${page}</b>). ` +
+      `Część panelu nie zadziała, dopóki nie zrestartujesz usług: ` +
+      `<code>sudo systemctl restart waga-scale waga-garmin waga-dashboard</code>`;
+    warn.hidden = false;
+  }
+
   async function boot() {
     const [health, users, predictions] = await Promise.all([
       getJSON("/api/health"), getJSON("/api/users"), getJSON("/api/predictions"),
     ]);
+    checkVersion(health);
 
     $("#healthLine").textContent =
       `${health.measurements} pomiarów · ${health.activities} treningów · ` +
@@ -504,6 +520,17 @@
     admin.total = data.total;
     admin.offset += data.measurements.length;
     renderAdminMeasurements();
+  }
+
+  function adminFailed(err) {
+    const hint = /404/.test(err.message)
+      ? "Ten endpoint nie istnieje w uruchomionej wersji usługi — zrestartuj ją: "
+        + "sudo systemctl restart waga-dashboard"
+      : err.message;
+    $("#settingsForm").innerHTML = `<p class="empty">Nie udało się wczytać ustawień. ${hint}</p>`;
+    $("#usersTable tbody").innerHTML =
+      `<tr><td colspan="10" class="empty">Nie udało się wczytać profili. ${hint}</td></tr>`;
+    say("#settingsMsg", hint, "err");
   }
 
   async function loadAdmin() {
@@ -659,7 +686,7 @@
     tab.classList.add("active");
     $(`#tab-${name}`).classList.add("active");
     Object.values(charts).forEach((c) => c.resize());
-    if (name === "admin") loadAdmin().catch((err) => say("#settingsMsg", err.message, "err"));
+    if (name === "admin") loadAdmin().catch(adminFailed);
   }
 
   document.querySelectorAll(".tab").forEach((tab) => {
