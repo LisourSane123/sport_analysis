@@ -140,6 +140,12 @@ main { padding: 20px clamp(16px, 4vw, 40px) 48px; }
 }
 .chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
+.chart-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--muted); font-size: 12.5px; cursor: pointer; user-select: none;
+}
+.chart-toggle input { accent-color: var(--accent); cursor: pointer; margin: 0; }
+
 .chart-wrap { position: relative; height: 300px; }
 .chart-wrap.small { height: 240px; }
 .chart-wrap.ghost {

@@ -3,7 +3,7 @@
   "use strict";
 
   const state = { user: "all", days: 30, sport: "all", series: "weight_kg",
-                  measurements: [], activities: [] };
+                  showAvg: false, measurements: [], activities: [] };
   const charts = {};
   const $ = (sel) => document.querySelector(sel);
 
@@ -73,8 +73,17 @@
     };
   }
 
+  // Aktualizacja w miejscu zamiast destroy/new - inaczej wykres "miga"
+  // przy kazdym odswiezeniu danych (co minute) przez powtarzana animacje.
   function drawChart(key, canvasId, config) {
-    charts[key]?.destroy();
+    const chart = charts[key];
+    if (chart && chart.config.type === config.type) {
+      chart.data = config.data;
+      chart.options = config.options;
+      chart.update("none");
+      return;
+    }
+    chart?.destroy();
     charts[key] = new Chart($(canvasId), config);
   }
 
@@ -86,46 +95,104 @@
     bmi: { label: "BMI", unit: "" },
   };
 
+  // podzialka osi czasu - wlasna, bo vendorowy Chart.js nie ma adaptera dat
+  const DAY_MS = 86400000;
+  const TICK_STEPS = [1 / 24, 2 / 24, 6 / 24, 12 / 24, 1, 2, 3, 7, 14, 30, 60, 90]
+    .map((d) => d * DAY_MS);
+
+  function timeTicks(min, max, target = 6) {
+    const span = Math.max(max - min, 1);
+    const step = TICK_STEPS.find((s) => span / s <= target) || TICK_STEPS.at(-1);
+    const first = new Date(min);
+    first.setMinutes(0, 0, 0);
+    if (step >= DAY_MS) first.setHours(0, 0, 0, 0);
+    const ticks = [];
+    for (let t = first.getTime(); t <= max && ticks.length < 40; t += step) {
+      if (t >= min) ticks.push({ value: t });
+    }
+    return ticks.length ? ticks : [{ value: min }, { value: max }];
+  }
+
+  const tickLabel = (ms, step) => {
+    const d = new Date(ms);
+    return step < DAY_MS
+      ? d.toLocaleString("pl-PL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })
+      : dateLabel(d);
+  };
+
   function renderWeightChart() {
     const meta = SERIES_META[state.series];
-    const points = state.measurements.filter((m) => m[state.series] !== null);
+    const points = state.measurements
+      .filter((m) => m[state.series] !== null)
+      .map((m) => ({ x: new Date(m.measured_at).getTime(), y: m[state.series], at: m.measured_at }))
+      .filter((p) => Number.isFinite(p.x))
+      .sort((a, b) => a.x - b.x);
     $("#weightEmpty").hidden = points.length > 0;
 
+    const avg = points.length
+      ? points.reduce((sum, p) => sum + Number(p.y), 0) / points.length : null;
+    const avgBox = $("#weightAvgToggle");
+    if (avgBox) {
+      const lbl = avgBox.closest("label")?.querySelector("span");
+      if (lbl) lbl.textContent = avg === null
+        ? "średnia" : `średnia ${num(avg, 2)} ${meta.unit}`.trim();
+    }
+
+    const xMin = points.length ? points[0].x : Date.now() - state.days * DAY_MS;
+    const xMax = points.length ? points.at(-1).x : Date.now();
+    const span = Math.max(xMax - xMin, 1);
+    const step = TICK_STEPS.find((s) => span / s <= 6) || TICK_STEPS.at(-1);
+
     const accent = css("--accent");
+    const datasets = [{
+      data: points,
+      borderColor: accent,
+      backgroundColor: (ctx) => {
+        const { ctx: c, chartArea } = ctx.chart;
+        if (!chartArea) return "transparent";
+        const g = c.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+        g.addColorStop(0, accent + "55");
+        g.addColorStop(1, accent + "00");
+        return g;
+      },
+      borderWidth: 2.5, fill: true, tension: .35,
+      pointRadius: points.length > 60 ? 0 : 3,
+      pointBackgroundColor: accent, pointHoverRadius: 6,
+    }];
+    if (state.showAvg && avg !== null) {
+      datasets.push({
+        data: [{ x: xMin, y: avg }, { x: xMax, y: avg }],
+        borderColor: css("--muted"), borderWidth: 1.5, borderDash: [6, 5],
+        pointRadius: 0, pointHoverRadius: 0, fill: false, tension: 0,
+      });
+    }
+
     drawChart("weight", "#weightChart", {
       type: "line",
-      data: {
-        labels: points.map((m) => dateLabel(m.measured_at)),
-        datasets: [{
-          data: points.map((m) => m[state.series]),
-          borderColor: accent,
-          backgroundColor: (ctx) => {
-            const { ctx: c, chartArea } = ctx.chart;
-            if (!chartArea) return "transparent";
-            const g = c.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
-            g.addColorStop(0, accent + "55");
-            g.addColorStop(1, accent + "00");
-            return g;
-          },
-          borderWidth: 2.5, fill: true, tension: .35,
-          pointRadius: points.length > 60 ? 0 : 3,
-          pointBackgroundColor: accent, pointHoverRadius: 6,
-        }],
-      },
+      data: { datasets },
       options: {
         ...baseOptions(),
         plugins: {
           ...baseOptions().plugins,
           tooltip: {
             ...baseOptions().plugins.tooltip,
+            filter: (item) => item.datasetIndex === 0,
             callbacks: {
-              title: (items) => dateTimeLabel(points[items[0].dataIndex].measured_at),
+              title: (items) => dateTimeLabel(items[0].raw.at),
               label: (item) => `${meta.label}: ${num(item.parsed.y, 2)} ${meta.unit}`,
             },
           },
         },
         scales: {
           ...baseOptions().scales,
+          // os liniowa w milisekundach - odstep miedzy punktami odpowiada odstepowi w czasie
+          x: {
+            ...baseOptions().scales.x,
+            type: "linear", min: xMin, max: xMax,
+            afterBuildTicks: (axis) => { axis.ticks = timeTicks(xMin, xMax); },
+            ticks: { ...baseOptions().scales.x.ticks, autoSkip: false,
+                     callback: (v) => tickLabel(v, step) },
+          },
           y: { ...baseOptions().scales.y, ticks: { color: css("--muted"), padding: 8,
                callback: (v) => `${axisNum(v)} ${meta.unit}` } },
         },
@@ -800,6 +867,11 @@
     document.querySelectorAll("#weightSeriesChips .chip").forEach((c) => c.classList.remove("active"));
     chip.classList.add("active");
     state.series = chip.dataset.series;
+    renderWeightChart();
+  });
+
+  $("#weightAvgToggle").addEventListener("change", (e) => {
+    state.showAvg = e.target.checked;
     renderWeightChart();
   });
 
