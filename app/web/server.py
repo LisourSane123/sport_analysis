@@ -21,8 +21,24 @@ from app.scale.body_metrics import composition_for
 from app.stats import weighted_averages
 
 BASE = Path(__file__).resolve().parent
+
+
+class RevalidatedStatics(StaticFiles):
+    """Statyki bez heurystycznego cache'owania.
+
+    Starlette nie wysyla Cache-Control, wiec przegladarka potrafi trzymac stary
+    app.js godzinami i nie odpytac serwera. "no-cache" nie wylacza cache - wymusza
+    tylko walidacje ETagiem, wiec niezmieniony plik dalej konczy sie na 304.
+    """
+
+    def file_response(self, *args: Any, **kwargs: Any):
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
 app = FastAPI(title="Waga_RP", docs_url="/api/docs", redoc_url=None)
-app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
+app.mount("/static", RevalidatedStatics(directory=BASE / "static"), name="static")
 INDEX = BASE / "templates" / "index.html"
 
 
@@ -58,7 +74,8 @@ def _user_id(conn, username: str | None) -> int | None:
 # ---------------------------------------------------------------- strony
 @app.get("/")
 def index():
-    return FileResponse(INDEX, media_type="text/html")
+    return FileResponse(INDEX, media_type="text/html",
+                        headers={"Cache-Control": "no-cache"})
 
 
 # ---------------------------------------------------------------- API

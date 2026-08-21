@@ -8,6 +8,11 @@ from pathlib import Path
 DB = Path(__file__).resolve().parents[2] / "data" / "waga.db"
 engine = sa.create_engine(f"sqlite:///file:{DB}?mode=ro&uri=true")
 with engine.connect() as conn:
-    query = sa.text("SELECT * FROM users")
-    df = pl.read_database(query, conn)
-print(df)
+    query_garmin_daily = sa.text("SELECT * FROM garmin_daily")
+    query_garmin_activities = sa.text("SELECT * FROM garmin_activities")
+    garmin_daily_df = pl.read_database(query_garmin_daily, conn)
+    garmin_activities_df = pl.read_database(query_garmin_activities, conn)
+print(f"Garmin daily: {len(garmin_daily_df)} rows")
+print(garmin_daily_df)
+print(f"Garmin activities: {len(garmin_activities_df)} rows")
+print(garmin_activities_df)

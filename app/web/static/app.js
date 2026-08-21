@@ -95,6 +95,41 @@
     bmi: { label: "BMI", unit: "" },
   };
 
+  // Linia sredniej jako plugin, a nie dodatkowy dataset: dataset o wyzszym
+  // indeksie Chart.js rysuje POD pierwszym, wiec chowal sie pod gradientem.
+  const avgLinePlugin = {
+    id: "avgLine",
+    afterDatasetsDraw(chart, _args, opts) {
+      if (!opts || opts.value === null || opts.value === undefined) return;
+      const { ctx, chartArea, scales } = chart;
+      const y = scales.y?.getPixelForValue(opts.value);
+      if (!chartArea || !Number.isFinite(y) || y < chartArea.top || y > chartArea.bottom) return;
+
+      ctx.save();
+      ctx.setLineDash([6, 5]);
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = opts.color;
+      ctx.beginPath();
+      ctx.moveTo(chartArea.left, y);
+      ctx.lineTo(chartArea.right, y);
+      ctx.stroke();
+
+      if (opts.label) {
+        ctx.setLineDash([]);
+        ctx.font = "11px system-ui, sans-serif";
+        ctx.textAlign = "right";
+        ctx.textBaseline = "bottom";
+        const w = ctx.measureText(opts.label).width;
+        ctx.fillStyle = opts.background;
+        ctx.fillRect(chartArea.right - w - 8, y - 16, w + 8, 15);
+        ctx.fillStyle = opts.color;
+        ctx.fillText(opts.label, chartArea.right - 4, y - 2);
+      }
+      ctx.restore();
+    },
+  };
+  Chart.register(avgLinePlugin);
+
   // podzialka osi czasu - wlasna, bo vendorowy Chart.js nie ma adaptera dat
   const DAY_MS = 86400000;
   const TICK_STEPS = [1 / 24, 2 / 24, 6 / 24, 12 / 24, 1, 2, 3, 7, 14, 30, 60, 90]
@@ -159,13 +194,6 @@
       pointRadius: points.length > 60 ? 0 : 3,
       pointBackgroundColor: accent, pointHoverRadius: 6,
     }];
-    if (state.showAvg && avg !== null) {
-      datasets.push({
-        data: [{ x: xMin, y: avg }, { x: xMax, y: avg }],
-        borderColor: css("--muted"), borderWidth: 1.5, borderDash: [6, 5],
-        pointRadius: 0, pointHoverRadius: 0, fill: false, tension: 0,
-      });
-    }
 
     drawChart("weight", "#weightChart", {
       type: "line",
@@ -174,6 +202,10 @@
         ...baseOptions(),
         plugins: {
           ...baseOptions().plugins,
+          avgLine: (state.showAvg && avg !== null) ? {
+            value: avg, color: css("--muted"), background: css("--surface"),
+            label: `śr. ${num(avg, 2)} ${meta.unit}`.trim(),
+          } : false,
           tooltip: {
             ...baseOptions().plugins.tooltip,
             filter: (item) => item.datasetIndex === 0,
