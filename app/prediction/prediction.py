@@ -8,7 +8,7 @@ from pathlib import Path
 DB = Path(__file__).resolve().parents[2] / "data" / "waga.db"
 engine = sa.create_engine(f"sqlite:///file:{DB}?mode=ro&uri=true")
 with engine.connect() as conn:
-    query_garmin_daily = sa.text("""SELECT start_time_local, distance, moving_time_s, total_elevation_gain, average_speed, max_speed, average_heart_rate, max_heart_rate, 
+    query_garmin_daily = sa.text("""SELECT start_time_local, distance_m, moving_time_s, total_elevation_gain, average_speed, max_speed, average_heartrate, max_heartrate, 
                                     calories, aerobic_te, anaerobic_te 
                                     FROM garmin_activities
                                     WHERE sport_type = 'running'""")
