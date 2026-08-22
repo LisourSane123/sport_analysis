@@ -13,6 +13,12 @@ with engine.connect() as conn:
     garmin_daily_df = pl.read_database(query_garmin_daily, conn)
     garmin_activities_df = pl.read_database(query_garmin_activities, conn)
 print(f"Garmin daily: {len(garmin_daily_df)} rows")
+for col in garmin_daily_df.columns:
+    print(f"{col}: {garmin_daily_df[col].dtype}")
+    print(f"First 5 values: {garmin_daily_df[col].head(5)}")
 print(garmin_daily_df)
 print(f"Garmin activities: {len(garmin_activities_df)} rows")
+for col in garmin_activities_df.columns:
+    print(f"{col}: {garmin_activities_df[col].dtype}")
+    print(f"First 5 values: {garmin_activities_df[col].head(5)}")
 print(garmin_activities_df)
