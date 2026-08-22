@@ -34,7 +34,13 @@ print(f"Scale measurements: {len(scale_measurements_df)} rows")
 for col in scale_measurements_df.columns:
     print(f"{col}: {scale_measurements_df[col].dtype}")
     print(f"Last 5 values: {scale_measurements_df[col].tail(5)}")
-print(scale_measurements_df)
+print("Tutaj po czym grupuje się scale_measurements_df")
+print(scale_measurements_df["recorded_at"])
+print("Tutaj po czym grupuje się garmin_activities_df")
+print(garmin_activities_df["day"])
+print("Tutaj po czym grupuje się garmin_daily_df")
+print(garmin_daily_df["start_time_local"])
+#print(scale_measurements_df)
 class Weight_predictor:
     def __init__(self):
         DB = Path(__file__).resolve().parents[2] / "data" / "waga.db"
