@@ -9,7 +9,7 @@ DB = Path(__file__).resolve().parents[2] / "data" / "waga.db"
 engine = sa.create_engine(f"sqlite:///file:{DB}?mode=ro&uri=true")
 with engine.connect() as conn:
     query_garmin_daily = sa.text("""SELECT start_time_local, distance, moving_time_s, total_elevation_gain, average_speed, max_speed, average_heart_rate, max_heart_rate, 
-    c                               alories, aerobic_te, anaerobic_te 
+                                    calories, aerobic_te, anaerobic_te 
                                     FROM garmin_daily
                                     WHERE sport_type = 'running'""")
     query_garmin_activities = sa.text("""SELECT day, steps, floors_climbed, calories_total, calories_active, resting_hr, avg_stress, body_battery_high, sleep_seconds, 
