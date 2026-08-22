@@ -13,7 +13,7 @@ with engine.connect() as conn:
                                     FROM garmin_activities
                                     WHERE sport_type = 'running'""")
     query_garmin_activities = sa.text("""SELECT day, steps, floors_climbed, calories_total, calories_active, resting_hr, avg_stress, body_battery_high, sleep_seconds, 
-                                         deep_sleep_seconds, light_sleep_seconds, rem_sleep_seconds, awake_seconds, sleep_score, hrv_status, treaning_readiness 
+                                         deep_sleep_seconds, light_sleep_seconds, rem_sleep_seconds, awake_seconds, sleep_score, hrv_status, training_readiness 
                                          FROM garmin_daily""")
     query_scale_mesurements = sa.text("""SELECT recorded_at, weight_kg, fat_percentage, muscle_mass_kg, bone_mass_kg, water_percentage
                                          from measurements""")
